@@ -1,0 +1,16 @@
+Case: IEEE39 (case39)
+Saved at: 20260321_150312
+
+Test points: 2000
+NR diverged: 1931 (96.5%)
+Rescued: 176 (9.1% of NR-divergent)
+Warm-start convergence: 12.2%
+NN train labels: 672
+NN train MSE: 5.9943e-03
+NN rescued: 0 (0.0% of NR-divergent)
+NN warm convergence: 3.5%
+DCOPF solved: 1/2000 (0.1%)
+DCOPF-theta rescued: 0 (0.0% of NR-divergent)
+DCOPF-theta warm convergence: 3.5%
+Training time: 1149.7s
+Final violation: 2.4203e+01 p.u.

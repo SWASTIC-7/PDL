@@ -1,0 +1,16 @@
+Case: IEEE300 (case300)
+Saved at: 20260323_194214
+
+Test points: 800
+NR diverged: 737 (92.1%)
+Rescued: 511 (69.3% of NR-divergent)
+Warm-start convergence: 70.5%
+NN train labels: 85
+NN train MSE: 1.4926e-01
+NN rescued: 0 (0.0% of NR-divergent)
+NN warm convergence: 5.1%
+DCOPF solved: 756/800 (94.5%)
+DCOPF-theta rescued: 584 (79.2% of NR-divergent)
+DCOPF-theta warm convergence: 80.9%
+Training time: 6676.0s
+Final violation: 3.2147e+01 p.u.

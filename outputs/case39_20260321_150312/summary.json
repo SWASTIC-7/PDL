@@ -1,0 +1,81 @@
+{
+  "case_name": "IEEE39",
+  "n_train": 10000,
+  "n_stressed_test": 2000,
+  "training_time_s": 1149.6903142929077,
+  "convergence_iters": 100,
+  "final_violation_pu": 24.203237533569336,
+  "nr_flat_converged": 69,
+  "nr_flat_diverged": 1931,
+  "nr_flat_conv_rate_pct": 3.45,
+  "warm_converged": 245,
+  "warm_diverged": 1755,
+  "warm_conv_rate_pct": 12.25,
+  "nn_train_mse": 0.005994317587465048,
+  "nn_train_labels": 672,
+  "nn_train_time_s": 0.11750102043151855,
+  "nn_inference_time_s": 0.013277530670166016,
+  "nn_warm_converged": 69,
+  "nn_warm_diverged": 1931,
+  "nn_warm_conv_rate_pct": 3.45,
+  "dcopf_solved": 1,
+  "dcopf_failed": 1999,
+  "dcopf_time_s": 87.94690680503845,
+  "dcopf_warm_converged": 69,
+  "dcopf_warm_diverged": 1931,
+  "dcopf_warm_conv_rate_pct": 3.45,
+  "n_rescued": 176,
+  "rescue_rate_pct": 9.114448472294148,
+  "n_rescued_nn": 0,
+  "nn_rescue_rate_pct": 0.0,
+  "n_rescued_dcopf": 0,
+  "dcopf_rescue_rate_pct": 0.0,
+  "n_both_div": 1755,
+  "n_flat_ok_warm_div": 0,
+  "n_flat_ok_nn_warm_div": 0,
+  "n_flat_ok_dcopf_warm_div": 0,
+  "pdl_max_P_viol": 3.3934268951416016,
+  "pdl_max_Q_viol": 2.8453245162963867,
+  "V_mse": 0.0001534456353723394,
+  "theta_mse": 42.59966053996851,
+  "stress_sweep": [
+    {
+      "stress_multiplier": 0.6,
+      "nr_conv_rate_pct": 100.0,
+      "warm_conv_rate_pct": 100.0
+    },
+    {
+      "stress_multiplier": 0.7,
+      "nr_conv_rate_pct": 100.0,
+      "warm_conv_rate_pct": 100.0
+    },
+    {
+      "stress_multiplier": 0.8,
+      "nr_conv_rate_pct": 36.0,
+      "warm_conv_rate_pct": 100.0
+    },
+    {
+      "stress_multiplier": 0.9,
+      "nr_conv_rate_pct": 0.0,
+      "warm_conv_rate_pct": 43.2
+    },
+    {
+      "stress_multiplier": 1.0,
+      "nr_conv_rate_pct": 0.0,
+      "warm_conv_rate_pct": 0.0
+    },
+    {
+      "stress_multiplier": 1.1,
+      "nr_conv_rate_pct": 0.0,
+      "warm_conv_rate_pct": 0.0
+    },
+    {
+      "stress_multiplier": 1.2,
+      "nr_conv_rate_pct": 0.0,
+      "warm_conv_rate_pct": 0.0
+    }
+  ],
+  "case_key": "case39",
+  "case_label": "IEEE39",
+  "saved_at": "20260321_150312"
+}
