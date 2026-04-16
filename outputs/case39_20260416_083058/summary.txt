@@ -1,0 +1,21 @@
+Case: IEEE39 (case39)
+Saved at: 20260416_083058
+
+Test points: 2000
+NR diverged: 1221 (61.0%)
+Rescued: 907 (74.3% of NR-divergent)
+Warm-start convergence: 84.3%
+NN train labels: 876
+NN train MSE: 4.8041e-03
+NN rescued: 0 (0.0% of NR-divergent)
+NN warm convergence: 39.0%
+DCPF solved: 2000/2000 (100.0%)
+DCPF-theta rescued: 0 (0.0% of NR-divergent)
+DCPF-theta warm convergence: 39.0%
+Training time: 823.6s
+NR-failed train points: 3999
+Hard retrain applied: True
+Hard retrain points: 3999
+Hard retrain iters: 20
+Hard retrain time: 64.4s
+Final violation: 1.9237e+01 p.u.

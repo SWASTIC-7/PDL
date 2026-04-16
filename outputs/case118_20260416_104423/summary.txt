@@ -1,0 +1,21 @@
+Case: IEEE118 (case118)
+Saved at: 20260416_104423
+
+Test points: 1400
+NR diverged: 0 (0.0%)
+Rescued: 0 (0.0% of NR-divergent)
+Warm-start convergence: 100.0%
+NN train labels: 1134
+NN train MSE: 1.4859e-02
+NN rescued: 0 (0.0% of NR-divergent)
+NN warm convergence: 100.0%
+DCPF solved: 1400/1400 (100.0%)
+DCPF-theta rescued: 0 (0.0% of NR-divergent)
+DCPF-theta warm convergence: 100.0%
+Training time: 1197.4s
+NR-failed train points: 400
+Hard retrain applied: True
+Hard retrain points: 400
+Hard retrain iters: 20
+Hard retrain time: 36.5s
+Final violation: 1.0921e+01 p.u.

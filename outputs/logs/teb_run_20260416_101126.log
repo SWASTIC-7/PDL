@@ -1,0 +1,154 @@
+[run_teb] Starting pipeline at Thu Apr 16 10:11:26 AM IST 2026
+[run_teb] Workspace: /home/psquarlab4/Desktop/teb1
+[run_teb] Log file: /home/psquarlab4/Desktop/teb1/outputs/logs/teb_run_20260416_101126.log
+
+================================================================================
+  PDL-GAT v6 — Divergence Rescue on Stressed Operating Points
+  Self-supervised transformer warm-start for Newton-Raphson
+================================================================================
+  Output directory: /home/psquarlab4/Desktop/teb1/outputs
+  Loading data from pandapower: case118
+numba cannot be imported and numba functions are disabled.
+Probably the execution is slow.
+Please install numba to gain a massive speedup.
+(or if you prefer slow execution, set the flag numba=False to avoid this warning!)
+  System: 118 buses, 53 generators, 99 loads
+  Base MVA: 100, Slack: 68, PV: 53, PQ: 64
+
+  Memory-safe config for case118: 
+    n_train=7000, n_test=1400, batch=512, chunk=256, nn_sup=1200, sweep=350x7, model={'d_model': 56, 'n_heads': 4, 'n_layers_primal': 4, 'n_layers_dual': 2}
+
+  Loading PGLIB-OPF API file for case118...
+  PGLIB cache hit: /home/psquarlab4/Desktop/teb1/pglib_cache/pglib_opf_case118_ieee__api.m
+  Parsed MATPOWER file: 118 buses, 54 gens, 186 branches
+  baseMVA = 100.0
+
+================================================================================
+  DIVERGENCE RESCUE EXPERIMENT: IEEE118
+================================================================================
+
+  CONFIG:
+  - Architecture: GAT + Global Attention (same as c5)
+  - Adaptive ρ: init=1, max=500, α=1.2, τ=0.9, warmup=15, freq=3
+  - Pre-training: 15 iters penalty-only at ρ=10
+  - Training data: 7000 curriculum (normal → mild stress → mixed → hard)
+  - Test data: 1400 PGLIB API-derived stressed scenarios
+  - NR max iterations: 30
+  - Train batch size: 512, accum steps: 8
+  - Inference chunk size: 256
+  - Stress sweep samples per level: 350
+  - Data source: PGLIB-OPF API tier (Active Power Increase)
+  - Post-train hard-mining: retrain on NR-failed training points
+  - Normal NN baseline: supervised MSE on NR labels
+  Device: cuda
+  System: 118 buses, 53 gens
+
+  Generating 7000 curriculum training samples...
+
+  IEEE118: FAILED — generate_api_test_scenarios() got an unexpected keyword argument 'base_scale'
+Traceback (most recent call last):
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 2468, in <module>
+    pdl, summary = run_divergence_rescue_experiment(
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 1502, in run_divergence_rescue_experiment
+    curriculum_stages, P_tr, Q_tr = generate_curriculum_training_stages_with_api(
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 429, in generate_curriculum_training_stages_with_api
+    P3_a, Q3_a, _ = generate_api_test_scenarios(
+TypeError: generate_api_test_scenarios() got an unexpected keyword argument 'base_scale'
+  Loading data from pandapower: case300
+numba cannot be imported and numba functions are disabled.
+Probably the execution is slow.
+Please install numba to gain a massive speedup.
+(or if you prefer slow execution, set the flag numba=False to avoid this warning!)
+  System: 300 buses, 68 generators, 193 loads
+  Base MVA: 100, Slack: 256, PV: 68, PQ: 231
+
+  Memory-safe config for case300: 
+    n_train=4000, n_test=800, batch=192, chunk=128, nn_sup=800, sweep=200x7, model={'d_model': 48, 'n_heads': 4, 'n_layers_primal': 3, 'n_layers_dual': 2}
+
+  Loading PGLIB-OPF API file for case300...
+  PGLIB cache hit: /home/psquarlab4/Desktop/teb1/pglib_cache/pglib_opf_case300_ieee__api.m
+  Parsed MATPOWER file: 300 buses, 69 gens, 411 branches
+  baseMVA = 100.0
+There are 13 branches which are considered as trafos - due to ratio unequal 0 or 1 - but connect same voltage levels.
+
+================================================================================
+  DIVERGENCE RESCUE EXPERIMENT: IEEE300
+================================================================================
+
+  CONFIG:
+  - Architecture: GAT + Global Attention (same as c5)
+  - Adaptive ρ: init=1, max=500, α=1.2, τ=0.9, warmup=15, freq=3
+  - Pre-training: 10 iters penalty-only at ρ=10
+  - Training data: 4000 curriculum (normal → mild stress → mixed → hard)
+  - Test data: 800 PGLIB API-derived stressed scenarios
+  - NR max iterations: 30
+  - Train batch size: 192, accum steps: 6
+  - Inference chunk size: 128
+  - Stress sweep samples per level: 200
+  - Data source: PGLIB-OPF API tier (Active Power Increase)
+  - Post-train hard-mining: retrain on NR-failed training points
+  - Normal NN baseline: supervised MSE on NR labels
+  Device: cuda
+  System: 300 buses, 68 gens
+
+  Generating 4000 curriculum training samples...
+
+  IEEE300: FAILED — generate_api_test_scenarios() got an unexpected keyword argument 'base_scale'
+Traceback (most recent call last):
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 2468, in <module>
+    pdl, summary = run_divergence_rescue_experiment(
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 1502, in run_divergence_rescue_experiment
+    curriculum_stages, P_tr, Q_tr = generate_curriculum_training_stages_with_api(
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 429, in generate_curriculum_training_stages_with_api
+    P3_a, Q3_a, _ = generate_api_test_scenarios(
+TypeError: generate_api_test_scenarios() got an unexpected keyword argument 'base_scale'
+
+================================================================================
+  ALL DONE
+================================================================================
+
+══════════════════════════════════════════════════════════════════════
+  Beautiful Plots for PDL-GAT v6 Divergence Rescue Results
+══════════════════════════════════════════════════════════════════════
+
+  NOTE: Run this AFTER c6.py in the same Python session.
+  Usage:
+    exec(open('c6_beautiful_plots.py').read())
+  or import and call:
+    from c6_beautiful_plots import generate_all_beautiful_plots
+    figs = generate_all_beautiful_plots(all_summaries)
+    plt.show()
+
+  'all_summaries' not found in scope. Loading from outputs/ ...
+
+  Loaded 4 summaries from outputs
+
+  Generating beautiful plots for IEEE118 ...
+/home/psquarlab4/Desktop/teb1/charts.py:576: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquarlab4/Desktop/teb1/charts.py:1165: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+  Generating beautiful plots for IEEE30 ...
+/home/psquarlab4/Desktop/teb1/charts.py:576: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquarlab4/Desktop/teb1/charts.py:1165: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+  Generating beautiful plots for IEEE300 ...
+/home/psquarlab4/Desktop/teb1/charts.py:576: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquarlab4/Desktop/teb1/charts.py:1165: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+  Generating beautiful plots for IEEE39 ...
+/home/psquarlab4/Desktop/teb1/charts.py:576: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquarlab4/Desktop/teb1/charts.py:1165: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+  Generating cross-case comparison ...
+
+  Saved 44 chart files under outputs/
+  Generated 0 in-memory figures.
+[run_teb] Completed at Thu Apr 16 10:11:38 AM IST 2026
+[run_teb] Outputs saved under: /home/psquarlab4/Desktop/teb1/outputs

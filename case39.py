@@ -28,6 +28,7 @@ import json
 import copy
 import os
 import re
+import logging
 import urllib.request
 import tempfile
 from collections import defaultdict
@@ -42,6 +43,17 @@ try:
     pd.options.mode.copy_on_write = False
 except Exception:
     pass
+
+
+class _DropPandapowerNumbaWarning(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        return 'numba cannot be imported and numba functions are disabled.' not in msg
+
+
+_pp_numba_filter = _DropPandapowerNumbaWarning()
+logging.getLogger('pandapower').addFilter(_pp_numba_filter)
+logging.getLogger('pandapower.auxiliary').addFilter(_pp_numba_filter)
 
 
 # ======================================================================
@@ -84,7 +96,8 @@ def get_pandapower_data(net, case_name):
     print(f"  Loading data from pandapower: {case_name}")
     try:
         pp.runpp(net, calculate_voltage_angles=False,
-                 enforce_q_limits=False, enforce_v_limits=False, init='flat')
+                 enforce_q_limits=False, enforce_v_limits=False, init='flat',
+                 numba=False)
     except Exception:
         pass
 
@@ -390,6 +403,109 @@ def generate_mixed_training_with_api(system_data, ppc_api, n_samples):
     return P[idx], Q[idx]
 
 
+def generate_curriculum_training_stages_with_api(system_data, ppc_api, n_samples):
+    """Build staged curriculum data from easy to hard operating points.
+
+    Returns:
+      stages: list of dicts with keys {'name', 'P', 'Q'}
+      P_all, Q_all: concatenation of all stage samples (for hard-mining/NN baseline)
+    """
+    n1 = int(n_samples * 0.25)
+    n2 = int(n_samples * 0.25)
+    n3 = int(n_samples * 0.30)
+    n4 = n_samples - n1 - n2 - n3
+
+    # Stage 1: easiest (normal operating region)
+    P1, Q1 = generate_load_scenarios(system_data, n1, load_variation=0.20)
+
+    # Stage 2: add mild synthetic stress
+    n2_normal = int(n2 * 0.75)
+    n2_stress = n2 - n2_normal
+    P2_n, Q2_n = generate_load_scenarios(system_data, n2_normal, load_variation=0.25)
+    P2_s, Q2_s, _ = generate_stressed_scenarios(
+        system_data, n2_stress,
+        load_multiplier_range=(1.05, 1.35),
+        bus_variation=0.12,
+    )
+    P2 = np.concatenate([P2_n, P2_s], axis=0)
+    Q2 = np.concatenate([Q2_n, Q2_s], axis=0)
+    idx2 = np.random.permutation(P2.shape[0])
+    P2, Q2 = P2[idx2], Q2[idx2]
+
+    # Stage 3: balanced mix (normal + synth stress + API-derived)
+    n3_normal = int(n3 * 0.55)
+    n3_synth = int(n3 * 0.25)
+    n3_api = n3 - n3_normal - n3_synth
+    P3_n, Q3_n = generate_load_scenarios(system_data, n3_normal, load_variation=0.30)
+    P3_s, Q3_s, _ = generate_stressed_scenarios(
+        system_data, n3_synth,
+        load_multiplier_range=(1.20, 1.70),
+        bus_variation=0.18,
+    )
+    P3_a, Q3_a, _ = generate_api_test_scenarios(
+        ppc_api, system_data, n3_api,
+        variation=0.15,
+        base_scale=0.95,
+    )
+    P3 = np.concatenate([P3_n, P3_s, P3_a], axis=0)
+    Q3 = np.concatenate([Q3_n, Q3_s, Q3_a], axis=0)
+    idx3 = np.random.permutation(P3.shape[0])
+    P3, Q3 = P3[idx3], Q3[idx3]
+
+    # Stage 4: hardest mix, biased toward stressed/API-near-collapse points
+    n4_normal = int(n4 * 0.20)
+    n4_synth = int(n4 * 0.40)
+    n4_api = n4 - n4_normal - n4_synth
+    P4_n, Q4_n = generate_load_scenarios(system_data, n4_normal, load_variation=0.35)
+    P4_s, Q4_s, _ = generate_stressed_scenarios(
+        system_data, n4_synth,
+        load_multiplier_range=(1.40, 2.20),
+        bus_variation=0.25,
+    )
+    P4_a, Q4_a, _ = generate_api_test_scenarios(
+        ppc_api, system_data, n4_api,
+        variation=0.22,
+        base_scale=1.05,
+    )
+    P4 = np.concatenate([P4_n, P4_s, P4_a], axis=0)
+    Q4 = np.concatenate([Q4_n, Q4_s, Q4_a], axis=0)
+    idx4 = np.random.permutation(P4.shape[0])
+    P4, Q4 = P4[idx4], Q4[idx4]
+
+    stages = [
+        dict(name='stage1_normal', P=P1, Q=Q1),
+        dict(name='stage2_mild_stress', P=P2, Q=Q2),
+        dict(name='stage3_balanced_mix', P=P3, Q=Q3),
+        dict(name='stage4_hard_stress', P=P4, Q=Q4),
+    ]
+
+    P_all = np.concatenate([s['P'] for s in stages], axis=0)
+    Q_all = np.concatenate([s['Q'] for s in stages], axis=0)
+    idx_all = np.random.permutation(P_all.shape[0])
+    return stages, P_all[idx_all], Q_all[idx_all]
+
+
+def _allocate_curriculum_stage_iters(max_outer_iters, n_stages):
+    """Allocate outer-loop iterations across curriculum stages."""
+    if n_stages <= 0:
+        return []
+    weights = np.array([0.20, 0.25, 0.30, 0.25], dtype=float)
+    if n_stages != len(weights):
+        weights = np.ones(n_stages, dtype=float) / max(n_stages, 1)
+    base = np.floor(weights * max_outer_iters).astype(int)
+    base = np.maximum(base, 1)
+    while base.sum() > max_outer_iters:
+        j = int(np.argmax(base))
+        if base[j] > 1:
+            base[j] -= 1
+        else:
+            break
+    while base.sum() < max_outer_iters:
+        j = int(np.argmin(base))
+        base[j] += 1
+    return base.tolist()
+
+
 # ======================================================================
 # Load scenario generation — NORMAL (for training, same as c5)
 # ======================================================================
@@ -537,7 +653,7 @@ def test_nr_convergence(system_data, P_pu, Q_pu, init_mode='flat',
         try:
             pp.runpp(net, init=pp_init, calculate_voltage_angles=True,
                      enforce_q_limits=False, enforce_v_limits=False,
-                     max_iteration=max_iter)
+                     max_iteration=max_iter, numba=False)
             elapsed = time.time() - t0
             nri = _get_nr_iterations(net)
             results.append(dict(
@@ -599,7 +715,7 @@ def run_dcopf_theta_batch(system_data, P_pu, Q_pu):
         try:
             if not has_dcpf:
                 raise RuntimeError("pandapower.rundcpp is unavailable")
-            pp.rundcpp(net)
+            pp.rundcpp(net, numba=False)
 
             if 'va_degree' in net.res_bus.columns:
                 theta_deg[i] = net.res_bus.va_degree.values.astype(np.float32)
@@ -674,7 +790,7 @@ def build_supervised_nr_targets(system_data, P_pu, Q_pu,
         try:
             pp.runpp(net, init='flat', calculate_voltage_angles=True,
                      enforce_q_limits=False, enforce_v_limits=False,
-                     max_iteration=nr_max_iter)
+                     max_iteration=nr_max_iter, numba=False)
             pg = (net.res_gen.p_mw.values[:n_gen] / baseMVA).astype(np.float32)
             v = net.res_bus.vm_pu.values.astype(np.float32)
             th = net.res_bus.va_degree.values.astype(np.float32)
@@ -1380,13 +1496,14 @@ def run_divergence_rescue_experiment(
     print(f"  - Architecture: GAT + Global Attention (same as c5)")
     print(f"  - Adaptive ρ: init=1, max=500, α=1.2, τ=0.9, warmup=15, freq=3")
     print(f"  - Pre-training: {pretrain_iters} iters penalty-only at ρ=10")
-    print(f"  - Training data: {n_train} mixed (50% normal + 25% synth + 25% API)")
+    print(f"  - Training data: {n_train} curriculum (normal → mild stress → mixed → hard)")
     print(f"  - Test data: {n_stressed_test} PGLIB API-derived stressed scenarios")
     print(f"  - NR max iterations: {nr_max_iter}")
     print(f"  - Train batch size: {train_batch_size}, accum steps: {train_accum_steps}")
     print(f"  - Inference chunk size: {inference_chunk_size}")
     print(f"  - Stress sweep samples per level: {sweep_samples}")
     print(f"  - Data source: PGLIB-OPF API tier (Active Power Increase)")
+    print(f"  - Post-train hard-mining: retrain on NR-failed training points")
     print(f"  - Normal NN baseline: supervised MSE on NR labels")
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -1395,14 +1512,24 @@ def run_divergence_rescue_experiment(
           f"{system_data['n_generators']} gens")
 
     # ------------------------------------------------------------------
-    # 1. Generate training data (mixed normal + stressed + API)
+    # 1. Generate curriculum training data (easy -> hard)
     # ------------------------------------------------------------------
-    print(f"\n  Generating {n_train} mixed training samples "
-          f"(incl. PGLIB API-derived)...")
-    P_tr, Q_tr = generate_mixed_training_with_api(
+    print(f"\n  Generating {n_train} curriculum training samples...")
+    curriculum_stages, P_tr, Q_tr = generate_curriculum_training_stages_with_api(
         system_data, ppc_api, n_train)
-    P_tr_t = torch.tensor(P_tr, dtype=torch.float32, device=device)
-    Q_tr_t = torch.tensor(Q_tr, dtype=torch.float32, device=device)
+    for si, st in enumerate(curriculum_stages, 1):
+        print(f"    Stage {si}: {st['name']} with {st['P'].shape[0]} samples")
+
+    # Keep tensors for stage-wise training to avoid repeated host/device transfers.
+    stage_tensors = [
+        dict(
+            name=st['name'],
+            P=torch.tensor(st['P'], dtype=torch.float32, device=device),
+            Q=torch.tensor(st['Q'], dtype=torch.float32, device=device),
+            n=st['P'].shape[0],
+        )
+        for st in curriculum_stages
+    ]
 
     # ------------------------------------------------------------------
     # 2. Initialise and train PDL-GAT
@@ -1419,29 +1546,127 @@ def run_divergence_rescue_experiment(
 
     # Pre-training
     t0_pre = time.time()
-    pdl.pretrain(P_tr_t, Q_tr_t, n_iters=pretrain_iters,
+    # Penalty-only pretrain on easiest stage to stabilize early dynamics.
+    pdl.pretrain(stage_tensors[0]['P'], stage_tensors[0]['Q'], n_iters=pretrain_iters,
                  rho_pre=10.0, batch_size=train_batch_size)
     pretrain_time = time.time() - t0_pre
     print(f"  Pre-training done in {pretrain_time:.1f}s")
 
-    # Main PDL training
-    print(f"\n  PDL training (threshold: {convergence_threshold} p.u.)...")
+    # Main PDL training with curriculum progression
+    print(f"\n  PDL curriculum training (final threshold: {convergence_threshold} p.u.)...")
     print("-" * 80)
     t0 = time.time()
     k, max_viol = 0, float('inf')
-    while max_viol > convergence_threshold and k < max_outer_iters:
-        _, max_viol = pdl.train_epoch(
-            P_tr_t, Q_tr_t, inner_iters=train_inner_iters,
-            batch_size=train_batch_size, accum_steps=train_accum_steps)
-        if k % 5 == 0:
-            print(f"  Iter {k + 1:3d}: Max Viol={max_viol:.6e} p.u., "
-                  f"ρ={pdl.rho:.1f}")
-        k += 1
+
+    stage_budgets = _allocate_curriculum_stage_iters(max_outer_iters, len(stage_tensors))
+    stage_thresholds = [1e-3, 5e-4, 2e-4, convergence_threshold]
+    stage_history = []
+
+    for si, st in enumerate(stage_tensors):
+        if k >= max_outer_iters:
+            break
+        budget = min(stage_budgets[si], max_outer_iters - k)
+        stage_thr = max(convergence_threshold, stage_thresholds[min(si, len(stage_thresholds) - 1)])
+        stage_iter = 0
+        stage_best = float('inf')
+
+        print(f"  Curriculum stage {si + 1}/{len(stage_tensors)}: {st['name']} "
+              f"(n={st['n']}, budget={budget}, thr={stage_thr:.1e})")
+
+        while stage_iter < budget and k < max_outer_iters:
+            _, stage_best = pdl.train_epoch(
+                st['P'], st['Q'], inner_iters=train_inner_iters,
+                batch_size=train_batch_size, accum_steps=train_accum_steps)
+            max_viol = stage_best
+            k += 1
+            stage_iter += 1
+            if k % 5 == 0 or stage_iter == 1:
+                print(f"  Iter {k:3d}: Stage={st['name']}, "
+                      f"Max Viol={max_viol:.6e} p.u., ρ={pdl.rho:.1f}")
+
+            # Keep a minimum number of updates per stage before early exit.
+            min_stage_updates = max(2, budget // 3)
+            if stage_iter >= min_stage_updates and stage_best <= stage_thr:
+                break
+
+        stage_history.append(dict(
+            name=st['name'],
+            n_samples=int(st['n']),
+            budget=int(budget),
+            iters_run=int(stage_iter),
+            final_stage_violation=float(stage_best),
+            threshold=float(stage_thr),
+        ))
+
+    # If we still have budget left, polish on the hardest stage.
+    if k < max_outer_iters and max_viol > convergence_threshold:
+        st = stage_tensors[-1]
+        print(f"  Final polish on hardest stage: {st['name']}")
+        while k < max_outer_iters and max_viol > convergence_threshold:
+            _, max_viol = pdl.train_epoch(
+                st['P'], st['Q'], inner_iters=train_inner_iters,
+                batch_size=train_batch_size, accum_steps=train_accum_steps)
+            k += 1
+            if k % 5 == 0:
+                print(f"  Iter {k:3d}: Max Viol={max_viol:.6e} p.u., ρ={pdl.rho:.1f}")
+
     tr_time = time.time() - t0
     total_train_time = pretrain_time + tr_time
+
+    # ------------------------------------------------------------------
+    # 2a. Hard-mining retrain on NR-flat failed training samples
+    # ------------------------------------------------------------------
+    print(f"\n  Mining NR-failed samples from curriculum pool ({len(P_tr)} points)...")
+    t0_hm = time.time()
+    nr_train_results = test_nr_convergence(
+        system_data, P_tr, Q_tr, init_mode='flat',
+        max_iter=nr_max_iter, label='NR-train-mine')
+    fail_idx = [i for i, r in enumerate(nr_train_results) if not r['converged']]
+    n_failed_train = len(fail_idx)
+
+    hard_retrain_applied = False
+    hard_retrain_points = 0
+    hard_retrain_iters = 0
+    hard_retrain_time = 0.0
+
+    if n_failed_train >= 16:
+        hard_retrain_applied = True
+        hard_retrain_points = n_failed_train
+        P_fail = P_tr[fail_idx]
+        Q_fail = Q_tr[fail_idx]
+        P_fail_t = torch.tensor(P_fail, dtype=torch.float32, device=device)
+        Q_fail_t = torch.tensor(Q_fail, dtype=torch.float32, device=device)
+
+        hard_retrain_iters = max(5, min(20, max_outer_iters // 4))
+        hard_inner_iters = max(40, int(train_inner_iters * 0.75))
+
+        print(f"  Hard-mining retrain: {hard_retrain_points} failed points, "
+              f"{hard_retrain_iters} iters")
+        t0_hm_train = time.time()
+        for hk in range(hard_retrain_iters):
+            _, max_viol = pdl.train_epoch(
+                P_fail_t, Q_fail_t,
+                inner_iters=hard_inner_iters,
+                batch_size=train_batch_size,
+                accum_steps=train_accum_steps,
+            )
+            if hk % 3 == 0 or hk == hard_retrain_iters - 1:
+                print(f"    hard-retrain iter {hk + 1:2d}/{hard_retrain_iters}: "
+                      f"max_viol={max_viol:.6e}, ρ={pdl.rho:.1f}")
+        hard_retrain_time = time.time() - t0_hm_train
+    else:
+        print("  Hard-mining retrain skipped (too few NR-failed training points).")
+
+    hard_mining_total_time = time.time() - t0_hm
+    total_train_time += hard_mining_total_time
+
     print(f"\n  Training done: {k} iters in {tr_time:.1f}s "
-          f"(+{pretrain_time:.1f}s pre-train = {total_train_time:.1f}s)")
+          f"(+{pretrain_time:.1f}s pre-train + "
+          f"{hard_mining_total_time:.1f}s hard-mining = {total_train_time:.1f}s)")
     print(f"  Final violation: {max_viol:.4e} p.u., final ρ: {pdl.rho:.1f}")
+    print(f"  NR-failed training samples: {n_failed_train}/{len(P_tr)}")
+    if hard_retrain_applied:
+        print(f"  Hard-mining retrain time: {hard_retrain_time:.1f}s")
 
     # ------------------------------------------------------------------
     # 2b. Train supervised normal NN baseline (MSE)
@@ -1934,6 +2159,7 @@ def run_divergence_rescue_experiment(
         n_stressed_test=n_stressed_test,
         training_time=total_train_time,
         convergence_iters=k,
+        curriculum_stage_history=stage_history,
         final_violation=max_viol,
         # NR flat
         nr_flat_converged=n_nr_conv,
@@ -1986,6 +2212,12 @@ def run_divergence_rescue_experiment(
         # PDL accuracy
         pdl_max_P_viol=pdl_max_Pv,
         pdl_max_Q_viol=pdl_max_Qv,
+        nr_failed_train_points=n_failed_train,
+        hard_retrain_applied=hard_retrain_applied,
+        hard_retrain_points=hard_retrain_points,
+        hard_retrain_iters=hard_retrain_iters,
+        hard_retrain_time=hard_retrain_time,
+        hard_mining_total_time=hard_mining_total_time,
         # Per-point data (for post-hoc plotting)
         flat_iters=flat_iters_list,
         warm_iters=warm_iters_list,
@@ -2078,6 +2310,7 @@ def _build_case_report(summary):
         'n_stressed_test': int(summary.get('n_stressed_test', 0)),
         'training_time_s': float(summary.get('training_time', 0.0)),
         'convergence_iters': int(summary.get('convergence_iters', 0)),
+        'curriculum_stage_history': _jsonify(summary.get('curriculum_stage_history', [])),
         'final_violation_pu': float(summary.get('final_violation', 0.0)),
         'nr_flat_converged': int(summary.get('nr_flat_converged', 0)),
         'nr_flat_diverged': int(summary.get('nr_flat_diverged', 0)),
@@ -2111,6 +2344,12 @@ def _build_case_report(summary):
         'n_flat_ok_dcopf_warm_div': int(summary.get('n_flat_ok_dcopf_warm_div', 0)),
         'pdl_max_P_viol': float(summary.get('pdl_max_P_viol', 0.0)),
         'pdl_max_Q_viol': float(summary.get('pdl_max_Q_viol', 0.0)),
+        'nr_failed_train_points': int(summary.get('nr_failed_train_points', 0)),
+        'hard_retrain_applied': bool(summary.get('hard_retrain_applied', False)),
+        'hard_retrain_points': int(summary.get('hard_retrain_points', 0)),
+        'hard_retrain_iters': int(summary.get('hard_retrain_iters', 0)),
+        'hard_retrain_time_s': float(summary.get('hard_retrain_time', 0.0)),
+        'hard_mining_total_time_s': float(summary.get('hard_mining_total_time', 0.0)),
         'nr_flat_time_s': float(summary.get('nr_flat_time', 0.0)),
         'nr_warm_time_s': float(summary.get('nr_warm_time', 0.0)),
         'pdl_inference_time_s': float(summary.get('pdl_inf_time', 0.0)),
@@ -2191,6 +2430,12 @@ def save_case_outputs(case_key, case_label, summary, root_dir='outputs'):
         f.write(f"({report['dcopf_rescue_rate_pct']:.1f}% of NR-divergent)\n")
         f.write(f"DCPF-theta warm convergence: {report['dcopf_warm_conv_rate_pct']:.1f}%\n")
         f.write(f"Training time: {report['training_time_s']:.1f}s\n")
+        f.write(f"NR-failed train points: {report['nr_failed_train_points']}\n")
+        f.write(f"Hard retrain applied: {report['hard_retrain_applied']}\n")
+        if report['hard_retrain_applied']:
+            f.write(f"Hard retrain points: {report['hard_retrain_points']}\n")
+            f.write(f"Hard retrain iters: {report['hard_retrain_iters']}\n")
+            f.write(f"Hard retrain time: {report['hard_retrain_time_s']:.1f}s\n")
         f.write(f"Final violation: {report['final_violation_pu']:.4e} p.u.\n")
 
     return run_dir
