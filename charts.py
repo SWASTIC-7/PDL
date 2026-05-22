@@ -577,6 +577,52 @@ def beautiful_iter_scatter(s, max_iter=30):
     return fig
 
 
+# ── 2E2.  Participation Factor Dot Plot ───────────────────────
+def beautiful_participation_dots(s):
+    """Dot plot of PDL warm-start participation factors across generators."""
+    pf = s.get('participation_factors', {})
+    pdl_pf = pf.get('pdl_warm') if isinstance(pf, dict) else None
+    if not pdl_pf:
+        return None
+
+    rows = [np.array(v, dtype=float) for v in pdl_pf if v is not None]
+    if len(rows) == 0:
+        return None
+
+    mat = np.vstack(rows)
+    n_gen = mat.shape[1]
+    x = np.arange(1, n_gen + 1)
+
+    fig, ax = plt.subplots(figsize=(12, 5.5))
+    jitter = np.random.uniform(-0.18, 0.18, size=mat.shape)
+    for i in range(n_gen):
+        ax.scatter(
+            x[i] + jitter[:, i],
+            mat[:, i],
+            s=14,
+            alpha=0.35,
+            color=_ACCENT1,
+            edgecolors='none',
+            zorder=2,
+        )
+
+    mean_pf = np.mean(mat, axis=0)
+    ax.plot(x, mean_pf, 'o-', color=_ACCENT3, linewidth=2.0,
+            markersize=5, markeredgecolor='white', markeredgewidth=0.8,
+            label='Mean')
+
+    ax.set_xlabel('Generator Index')
+    ax.set_ylabel('Participation Factor')
+    ax.set_title(f'PDL Warm-Start Participation Factors  —  {s["case_name"]}')
+    ax.set_xlim(0.5, n_gen + 0.5)
+    ax.set_ylim(0.0, max(0.05, float(np.max(mat)) * 1.15))
+    ax.legend(loc='upper right', fontsize=10)
+    _rounded_box(ax)
+    _subtitle(ax, f'{mat.shape[0]} converged points; dots show per-point factors')
+    plt.tight_layout()
+    return fig
+
+
 # ── 2F.  Rescue Summary Donut Chart ─────────────────────────────
 def beautiful_donut(s):
     """Donut / pie showing the 4-way classification of test points."""
@@ -1193,6 +1239,7 @@ def generate_all_beautiful_plots(all_summaries=None, output_dir='outputs', save_
         all_figs[f'{name}_convergence_count'] = beautiful_convergence_count(s)
         all_figs[f'{name}_stress_sweep'] = beautiful_conv_vs_stress(s)
         all_figs[f'{name}_iter_scatter'] = beautiful_iter_scatter(s)
+        all_figs[f'{name}_participation_dots'] = beautiful_participation_dots(s)
         all_figs[f'{name}_method_times'] = beautiful_method_time_breakdown(s)
         all_figs[f'{name}_method_iterations'] = beautiful_method_iteration_compare(s)
         all_figs[f'{name}_donut']        = beautiful_donut(s)
@@ -1207,7 +1254,7 @@ def generate_all_beautiful_plots(all_summaries=None, output_dir='outputs', save_
             for key in [
                 f'{name}_convergence', f'{name}_errors', f'{name}_rescue_bar',
                 f'{name}_convergence_count', f'{name}_stress_sweep',
-                f'{name}_iter_scatter', f'{name}_method_times',
+                f'{name}_iter_scatter', f'{name}_participation_dots', f'{name}_method_times',
                 f'{name}_method_iterations', f'{name}_donut',
                 f'{name}_strategy', f'{name}_dashboard'
             ]:

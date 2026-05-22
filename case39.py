@@ -1786,7 +1786,6 @@ def run_divergence_rescue_experiment(
           f"{n_warm_div} diverged")
     print(f"  PDL warm-start + NR total time: {nr_warm_time:.1f}s")
 
-    pf_flat = compute_participation_from_results(nr_flat_results, system_data)
     pf_warm = compute_participation_from_results(nr_warm_results, system_data)
 
     # ------------------------------------------------------------------
@@ -1832,9 +1831,6 @@ def run_divergence_rescue_experiment(
               f"converged, {n_nn_div} diverged")
         print(f"  Normal NN warm-start + NR total time: {nr_nn_warm_time:.1f}s")
 
-        pf_nn = compute_participation_from_results(
-            nr_nn_warm_results, system_data)
-
         nn_warm_iters_list = [r['iterations'] for r in nr_nn_warm_results]
         nn_warm_conv_list = [r['converged'] for r in nr_nn_warm_results]
 
@@ -1868,8 +1864,6 @@ def run_divergence_rescue_experiment(
           f"converged, {n_dcopf_warm_div} diverged")
     print(f"  DCPF-theta warm-start + NR total time: {nr_dcopf_warm_time:.1f}s")
 
-    pf_dcopf = compute_participation_from_results(
-        nr_dcopf_warm_results, system_data)
 
     # ------------------------------------------------------------------
     # 7. Rescue statistics
@@ -2276,10 +2270,7 @@ def run_divergence_rescue_experiment(
         history=dict(pdl.history),
         strat_labels=strat_labels,
         participation_factors=dict(
-            nr_flat=pf_flat,
             pdl_warm=pf_warm,
-            nn_warm=pf_nn if nn_state is not None else None,
-            dcopf_warm=pf_dcopf,
         ),
     )
     if V_nr_conv is not None and len(V_nr_conv) > 0:
@@ -2486,11 +2477,7 @@ def save_case_outputs(case_key, case_label, summary, root_dir='outputs'):
             return sum(1 for v in vals if v is not None)
 
         f.write("Participation factors computed (converged):\n")
-        f.write(f"  NR flat: { _pf_count('nr_flat') }/{report['n_stressed_test']}\n")
         f.write(f"  PDL warm: { _pf_count('pdl_warm') }/{report['n_stressed_test']}\n")
-        if pf.get('nn_warm') is not None:
-            f.write(f"  NN warm: { _pf_count('nn_warm') }/{report['n_stressed_test']}\n")
-        f.write(f"  DCPF warm: { _pf_count('dcopf_warm') }/{report['n_stressed_test']}\n")
         f.write(f"Training time: {report['training_time_s']:.1f}s\n")
         f.write(f"NR-failed train points: {report['nr_failed_train_points']}\n")
         f.write(f"Hard retrain applied: {report['hard_retrain_applied']}\n")
