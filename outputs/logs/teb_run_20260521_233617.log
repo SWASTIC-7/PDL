@@ -1,0 +1,522 @@
+[run_teb] Starting pipeline at Thu May 21 11:36:17 PM IST 2026
+[run_teb] Workspace: /home/psquarlab4/Desktop/teb1
+[run_teb] Log file: /home/psquarlab4/Desktop/teb1/outputs/logs/teb_run_20260521_233617.log
+
+================================================================================
+  PDL-GAT v6 — Divergence Rescue on Stressed Operating Points
+  Self-supervised transformer warm-start for Newton-Raphson
+================================================================================
+  Output directory: /home/psquarlab4/Desktop/teb1/outputs
+  Loading data from pandapower: case118
+  System: 118 buses, 53 generators, 99 loads
+  Base MVA: 100, Slack: 68, PV: 53, PQ: 64
+
+  Memory-safe config for case118: 
+    n_train=7000, n_test=1600, batch=512, chunk=256, nn_sup=1200, sweep=350x7, model={'d_model': 56, 'n_heads': 4, 'n_layers_primal': 4, 'n_layers_dual': 2}
+
+  Loading PGLIB-OPF API file for case118...
+  PGLIB cache hit: /home/psquarlab4/Desktop/teb1/pglib_cache/pglib_opf_case118_ieee__api.m
+  Parsed MATPOWER file: 118 buses, 54 gens, 186 branches
+  baseMVA = 100.0
+
+================================================================================
+  DIVERGENCE RESCUE EXPERIMENT: IEEE118
+================================================================================
+
+  CONFIG:
+  - Architecture: GAT + Global Attention (same as c5)
+  - Adaptive ρ: init=1, max=500, α=1.2, τ=0.9, warmup=15, freq=3
+  - Pre-training: 15 iters penalty-only at ρ=10
+  - Training data: 7000 mixed (50% normal + 25% synth + 25% API)
+  - Test data: 1600 PGLIB API-derived stressed scenarios
+  - NR max iterations: 30
+  - Train batch size: 512, accum steps: 8
+  - Inference chunk size: 256
+  - Stress sweep samples per level: 350
+  - Data source: PGLIB-OPF API tier (Active Power Increase)
+  - Normal NN baseline: supervised MSE on NR labels
+  Device: cuda
+  System: 118 buses, 53 gens
+
+  Curriculum phases: 3
+    1. easy range=(1.05, 1.3), api_var=0.1 iters=27
+    2. medium range=(1.15, 1.55), api_var=0.15 iters=27
+    3. hard range=(1.25, 1.9), api_var=0.2 iters=26
+  Initialising PDL-GAT v6 model...
+
+  Generating 7000 training samples for phase 'easy'...
+  Pre-training: 15 iters, penalty-only at ρ=10.0
+    pre-train iter  5: max_viol=7.0767e+00 p.u., ρ_pre=10.0
+    pre-train iter 10: max_viol=4.9194e+00 p.u., ρ_pre=10.0
+    pre-train iter 15: max_viol=4.4007e+00 p.u., ρ_pre=10.0
+  Pre-training done in 22.8s
+  PDL training phase 'easy' (threshold: 0.0001 p.u.)...
+--------------------------------------------------------------------------------
+  Iter   1: Max Viol=5.696044e+00 p.u., ρ=1.0
+  Iter   6: Max Viol=5.842296e+00 p.u., ρ=1.0
+  Iter  11: Max Viol=4.385697e+00 p.u., ρ=1.0
+  Iter  16: Max Viol=5.047462e+00 p.u., ρ=1.0
+  Iter  21: Max Viol=6.453629e+00 p.u., ρ=1.4
+  Iter  26: Max Viol=4.947453e+00 p.u., ρ=1.4
+
+  Generating 7000 training samples for phase 'medium'...
+  PDL training phase 'medium' (threshold: 0.0001 p.u.)...
+--------------------------------------------------------------------------------
+  Iter  31: Max Viol=6.115613e+00 p.u., ρ=2.1
+  Iter  36: Max Viol=6.255275e+00 p.u., ρ=3.0
+  Iter  41: Max Viol=6.503290e+00 p.u., ρ=3.6
+  Iter  46: Max Viol=6.364407e+00 p.u., ρ=5.2
+  Iter  51: Max Viol=6.390234e+00 p.u., ρ=7.4
+
+  Generating 7000 training samples for phase 'hard'...
+  PDL training phase 'hard' (threshold: 0.0001 p.u.)...
+--------------------------------------------------------------------------------
+  Iter  56: Max Viol=5.840970e+00 p.u., ρ=8.9
+  Iter  61: Max Viol=5.696599e+00 p.u., ρ=10.7
+  Iter  66: Max Viol=5.749445e+00 p.u., ρ=15.4
+  Iter  71: Max Viol=5.818543e+00 p.u., ρ=18.5
+  Iter  76: Max Viol=5.848471e+00 p.u., ρ=26.6
+
+  Training done: 80 iters in 3383.7s (+22.8s pre-train = 3406.5s)
+  Final violation: 5.7455e+00 p.u., final ρ: 31.9
+
+  Building supervised NR labels for normal NN baseline...
+    NN epoch  10/36: mse=4.6271e-02
+    NN epoch  20/36: mse=3.0865e-02
+    NN epoch  30/36: mse=1.9326e-02
+    NN epoch  36/36: mse=1.3849e-02
+  Normal NN baseline trained on 1099 samples in 0.2s
+
+================================================================================
+  STRESSED TEST SET: 1600 PGLIB API-derived scenarios
+================================================================================
+
+  API test avg total P: 69.7583 p.u. (~1.64x base load)
+  Running NR flat-start on 1600 stressed points...
+  NR flat-start: 1343/1600 converged, 257 DIVERGED (16.1%)
+  NR flat-start total time: 74.8s
+
+  Running PDL inference...
+  PDL inference: 130.1 ms (0.0813 ms/sample)
+  PDL max violations: P=1.2034e+00, Q=1.3177e+00
+
+  Selecting failed high-divergence points for retrain...
+  Retraining on 65 hard points (top 25% divergence of failed set)
+    Retrain iter  1/8: max_viol=1.4676e+00
+    Retrain iter  4/8: max_viol=1.9634e+00
+    Retrain iter  7/8: max_viol=1.3094e+00
+    Retrain iter  8/8: max_viol=2.0570e+00
+  Retrain time: 2.3s (total training time 3408.8s)
+  Re-running PDL inference after retrain...
+
+  Running PDL warm-start + NR on 1600 stressed points...
+  PDL warm-start + NR: 1600/1600 converged, 0 diverged
+  PDL warm-start + NR total time: 65.1s
+
+  Running normal NN inference...
+  Normal NN inference: 15.6 ms (0.0097 ms/sample)
+
+  Running normal NN warm-start + NR on 1600 points...
+  Normal NN warm-start + NR: 1343/1600 converged, 257 diverged
+  Normal NN warm-start + NR total time: 75.5s
+
+  Running DCPF on each stressed point for theta warm-start...
+  DCPF solved: 1600/1600 (100.0%)
+  DCPF total time: 50.5s
+
+  Running DCPF-theta warm-start + NR on 1600 stressed points...
+  DCPF-theta warm-start + NR: 1343/1600 converged, 257 diverged
+  DCPF-theta warm-start + NR total time: 75.5s
+
+================================================================================
+  DIVERGENCE RESCUE RESULTS — IEEE118
+================================================================================
+
+  Total stressed test points:        1600
+  NR flat-start converged:           1343 (83.9%)
+  NR flat-start DIVERGED:            257 (16.1%)
+  PDL warm-start + NR converged:     1600 (100.0%)
+  NN warm-start + NR converged:      1343 (83.9%)
+  DCPF-theta warm-start + NR conv:  1343 (83.9%)
+
+  Both converged:                    1343
+  *** RESCUED by PDL warm-start:     257 ***
+  *** RESCUED by NN warm-start:      0 ***
+  *** RESCUED by DCPF-theta warm:    0 ***
+  Both diverged:                     0
+  Flat OK but warm diverged:         0
+  Flat OK but NN warm diverged:      0
+  Flat OK but DCPF warm diverged:    0
+
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  PDL WARM-START RESCUES 100.0% OF NR-DIVERGENT CASES     ║
+  ║  (257 out of 257 divergent points)                           ║
+  ╚═══════════════════════════════════════════════════════════╝
+  NN warm-start rescue rate:         0.0%
+  DCPF-theta rescue rate:            0.0%
+
+  Iteration reduction (both-converged subset):
+    NR flat avg iters:  4.97
+    PDL warm avg iters: 4.29
+    Reduction:          13.7%
+
+  Accuracy vs NR (both-converged subset, 1343 pts):
+    Voltage MSE:  1.3692e-05 p.u.²
+    Angle MSE:    1.2119e+03 deg²
+
+================================================================================
+  CONVERGENCE VS STRESS LEVEL SWEEP
+================================================================================
+
+  API load × 0.6 ...
+    NR flat: 100.0%   PDL warm: 100.0%   Rescue margin: +0.0pp
+  API load × 0.7 ...
+    NR flat: 100.0%   PDL warm: 100.0%   Rescue margin: +0.0pp
+  API load × 0.8 ...
+    NR flat: 100.0%   PDL warm: 100.0%   Rescue margin: +0.0pp
+  API load × 0.9 ...
+    NR flat: 100.0%   PDL warm: 100.0%   Rescue margin: +0.0pp
+  API load × 1.0 ...
+    NR flat: 100.0%   PDL warm: 100.0%   Rescue margin: +0.0pp
+  API load × 1.1 ...
+    NR flat: 80.9%   PDL warm: 100.0%   Rescue margin: +19.1pp
+  API load × 1.2 ...
+    NR flat: 0.0%   PDL warm: 100.0%   Rescue margin: +100.0pp
+
+================================================================================
+  TRACTABILITY SNAPSHOT (BASE + VARIATION)
+================================================================================
+
+  Base case: NR flat=True | PDL warm=True | DCPF warm=True
+  Variation 0.10: NR flat=80.8% | PDL warm=100.0% | margin=+19.2pp
+  Variation 0.15: NR flat=86.7% | PDL warm=100.0% | margin=+13.3pp
+  Variation 0.20: NR flat=85.8% | PDL warm=100.0% | margin=+14.2pp
+  Saved outputs: /home/psquarlab4/Desktop/teb1/outputs/case118_20260522_004414
+
+  IEEE118: COMPLETED
+
+  Loading data from pandapower: case300
+  System: 300 buses, 68 generators, 193 loads
+  Base MVA: 100, Slack: 256, PV: 68, PQ: 231
+
+  Memory-safe config for case300: 
+    n_train=4000, n_test=800, batch=192, chunk=128, nn_sup=800, sweep=200x7, model={'d_model': 48, 'n_heads': 4, 'n_layers_primal': 3, 'n_layers_dual': 2}
+
+  Loading PGLIB-OPF API file for case300...
+  PGLIB cache hit: /home/psquarlab4/Desktop/teb1/pglib_cache/pglib_opf_case300_ieee__api.m
+  Parsed MATPOWER file: 300 buses, 69 gens, 411 branches
+  baseMVA = 100.0
+There are 13 branches which are considered as trafos - due to ratio unequal 0 or 1 - but connect same voltage levels.
+
+================================================================================
+  DIVERGENCE RESCUE EXPERIMENT: IEEE300
+================================================================================
+
+  CONFIG:
+  - Architecture: GAT + Global Attention (same as c5)
+  - Adaptive ρ: init=1, max=500, α=1.2, τ=0.9, warmup=15, freq=3
+  - Pre-training: 10 iters penalty-only at ρ=10
+  - Training data: 4000 mixed (50% normal + 25% synth + 25% API)
+  - Test data: 800 PGLIB API-derived stressed scenarios
+  - NR max iterations: 30
+  - Train batch size: 192, accum steps: 6
+  - Inference chunk size: 128
+  - Stress sweep samples per level: 200
+  - Data source: PGLIB-OPF API tier (Active Power Increase)
+  - Normal NN baseline: supervised MSE on NR labels
+  Device: cuda
+  System: 300 buses, 68 gens
+
+  Curriculum phases: 3
+    1. easy range=(1.05, 1.3), api_var=0.1 iters=20
+    2. medium range=(1.15, 1.55), api_var=0.15 iters=20
+    3. hard range=(1.25, 1.9), api_var=0.2 iters=20
+  Initialising PDL-GAT v6 model...
+
+  Generating 4000 training samples for phase 'easy'...
+  Pre-training: 10 iters, penalty-only at ρ=10.0
+    pre-train iter  5: max_viol=3.3115e+01 p.u., ρ_pre=10.0
+    pre-train iter 10: max_viol=4.6032e+01 p.u., ρ_pre=10.0
+  Pre-training done in 35.7s
+  PDL training phase 'easy' (threshold: 0.0001 p.u.)...
+--------------------------------------------------------------------------------
+  Iter   1: Max Viol=4.346631e+01 p.u., ρ=1.0
+  Iter   6: Max Viol=3.245793e+01 p.u., ρ=1.0
+  Iter  11: Max Viol=3.305507e+01 p.u., ρ=1.0
+  Iter  16: Max Viol=3.540833e+01 p.u., ρ=1.0
+
+  Generating 4000 training samples for phase 'medium'...
+  PDL training phase 'medium' (threshold: 0.0001 p.u.)...
+--------------------------------------------------------------------------------
+  Iter  21: Max Viol=3.164590e+01 p.u., ρ=1.0
+  Iter  26: Max Viol=2.629112e+01 p.u., ρ=1.2
+  Iter  31: Max Viol=2.571241e+01 p.u., ρ=1.4
+  Iter  36: Max Viol=2.375755e+01 p.u., ρ=2.1
+
+  Generating 4000 training samples for phase 'hard'...
+  PDL training phase 'hard' (threshold: 0.0001 p.u.)...
+--------------------------------------------------------------------------------
+  Iter  41: Max Viol=5.328831e+01 p.u., ρ=2.5
+  Iter  46: Max Viol=5.107798e+01 p.u., ρ=3.0
+  Iter  51: Max Viol=4.147133e+01 p.u., ρ=3.6
+  Iter  56: Max Viol=4.596439e+01 p.u., ρ=4.3
+
+  Training done: 60 iters in 6596.1s (+35.7s pre-train = 6631.7s)
+  Final violation: 4.1392e+01 p.u., final ρ: 6.2
+
+  Building supervised NR labels for normal NN baseline...
+    NN epoch  10/30: mse=3.3320e-01
+    NN epoch  20/30: mse=1.9808e-01
+    NN epoch  30/30: mse=1.4542e-01
+  Normal NN baseline trained on 74 samples in 0.0s
+
+================================================================================
+  STRESSED TEST SET: 800 PGLIB API-derived scenarios
+================================================================================
+
+  API test avg total P: 268.7540 p.u. (~1.13x base load)
+  Running NR flat-start on 800 stressed points...
+  NR flat-start: 74/800 converged, 726 DIVERGED (90.8%)
+  NR flat-start total time: 80.2s
+
+  Running PDL inference...
+  PDL inference: 258.4 ms (0.3230 ms/sample)
+  PDL max violations: P=3.2413e+00, Q=6.0070e+00
+
+  Selecting failed high-divergence points for retrain...
+  Retraining on 182 hard points (top 25% divergence of failed set)
+    Retrain iter  1/7: max_viol=6.0804e+00
+    Retrain iter  4/7: max_viol=8.5237e+00
+    Retrain iter  7/7: max_viol=7.1788e+00
+  Retrain time: 26.1s (total training time 6657.8s)
+  Re-running PDL inference after retrain...
+
+  Running PDL warm-start + NR on 800 stressed points...
+  PDL warm-start + NR: 540/800 converged, 260 diverged
+  PDL warm-start + NR total time: 55.6s
+
+  Running normal NN inference...
+  Normal NN inference: 11.1 ms (0.0139 ms/sample)
+
+  Running normal NN warm-start + NR on 800 points...
+  Normal NN warm-start + NR: 47/800 converged, 753 diverged
+  Normal NN warm-start + NR total time: 83.7s
+
+  Running DCPF on each stressed point for theta warm-start...
+  DCPF solved: 800/800 (100.0%)
+  DCPF total time: 30.2s
+
+  Running DCPF-theta warm-start + NR on 800 stressed points...
+  DCPF-theta warm-start + NR: 74/800 converged, 726 diverged
+  DCPF-theta warm-start + NR total time: 81.4s
+
+================================================================================
+  DIVERGENCE RESCUE RESULTS — IEEE300
+================================================================================
+
+  Total stressed test points:        800
+  NR flat-start converged:           74 (9.2%)
+  NR flat-start DIVERGED:            726 (90.8%)
+  PDL warm-start + NR converged:     540 (67.5%)
+  NN warm-start + NR converged:      47 (5.9%)
+  DCPF-theta warm-start + NR conv:  74 (9.2%)
+
+  Both converged:                    62
+  *** RESCUED by PDL warm-start:     478 ***
+  *** RESCUED by NN warm-start:      0 ***
+  *** RESCUED by DCPF-theta warm:    0 ***
+  Both diverged:                     248
+  Flat OK but warm diverged:         12
+  Flat OK but NN warm diverged:      27
+  Flat OK but DCPF warm diverged:    0
+
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  PDL WARM-START RESCUES  65.8% OF NR-DIVERGENT CASES     ║
+  ║  (478 out of 726 divergent points)                           ║
+  ╚═══════════════════════════════════════════════════════════╝
+  NN warm-start rescue rate:         0.0%
+  DCPF-theta rescue rate:            0.0%
+
+  Iteration reduction (both-converged subset):
+    NR flat avg iters:  5.23
+    PDL warm avg iters: 4.55
+    Reduction:          13.0%
+
+  Accuracy vs NR (both-converged subset, 62 pts):
+    Voltage MSE:  1.7581e-03 p.u.²
+    Angle MSE:    2.6160e+03 deg²
+
+================================================================================
+  CONVERGENCE VS STRESS LEVEL SWEEP
+================================================================================
+
+  API load × 0.6 ...
+    NR flat: 0.0%   PDL warm: 100.0%   Rescue margin: +100.0pp
+  API load × 0.7 ...
+    NR flat: 0.0%   PDL warm: 96.5%   Rescue margin: +96.5pp
+  API load × 0.8 ...
+    NR flat: 3.5%   PDL warm: 97.5%   Rescue margin: +94.0pp
+  API load × 0.9 ...
+    NR flat: 99.5%   PDL warm: 100.0%   Rescue margin: +0.5pp
+  API load × 1.0 ...
+    NR flat: 0.0%   PDL warm: 89.0%   Rescue margin: +89.0pp
+  API load × 1.1 ...
+    NR flat: 0.0%   PDL warm: 0.0%   Rescue margin: +0.0pp
+  API load × 1.2 ...
+    NR flat: 0.0%   PDL warm: 0.0%   Rescue margin: +0.0pp
+
+================================================================================
+  TRACTABILITY SNAPSHOT (BASE + VARIATION)
+================================================================================
+
+  Base case: NR flat=False | PDL warm=True | DCPF warm=False
+  Variation 0.10: NR flat=5.0% | PDL warm=70.0% | margin=+65.0pp
+  Variation 0.15: NR flat=2.5% | PDL warm=55.0% | margin=+52.5pp
+  Variation 0.20: NR flat=11.2% | PDL warm=57.5% | margin=+46.2pp
+  Saved outputs: /home/psquarlab4/Desktop/teb1/outputs/case300_20260522_024609
+
+  IEEE300: COMPLETED
+
+  Loading data from pandapower: case1354pegase
+  System: 1354 buses, 259 generators, 621 loads
+  Base MVA: 100, Slack: 639, PV: 259, PQ: 1094
+
+  Memory-safe config for case1354pegase: 
+    n_train=2200, n_test=450, batch=96, chunk=64, nn_sup=450, sweep=80x6, model={'d_model': 40, 'n_heads': 4, 'n_layers_primal': 3, 'n_layers_dual': 2}
+
+  Loading PGLIB-OPF API file for case1354pegase...
+  PGLIB cache hit: /home/psquarlab4/Desktop/teb1/pglib_cache/pglib_opf_case1354_pegase__api.m
+  Parsed MATPOWER file: 1354 buses, 260 gens, 1991 branches
+  baseMVA = 100.0
+There are 6 branches which are considered as trafos - due to ratio unequal 0 or 1 - but connect same voltage levels.
+
+================================================================================
+  DIVERGENCE RESCUE EXPERIMENT: PEGASE1354
+================================================================================
+
+  CONFIG:
+  - Architecture: GAT + Global Attention (same as c5)
+  - Adaptive ρ: init=1, max=500, α=1.2, τ=0.9, warmup=15, freq=3
+  - Pre-training: 8 iters penalty-only at ρ=10
+  - Training data: 2200 mixed (50% normal + 25% synth + 25% API)
+  - Test data: 450 PGLIB API-derived stressed scenarios
+  - NR max iterations: 30
+  - Train batch size: 96, accum steps: 6
+  - Inference chunk size: 64
+  - Stress sweep samples per level: 80
+  - Data source: PGLIB-OPF API tier (Active Power Increase)
+  - Normal NN baseline: supervised MSE on NR labels
+  Device: cuda
+  System: 1354 buses, 259 gens
+
+  Curriculum phases: 3
+    1. easy range=(1.05, 1.3), api_var=0.1 iters=15
+    2. medium range=(1.15, 1.55), api_var=0.15 iters=15
+    3. hard range=(1.25, 1.9), api_var=0.2 iters=15
+  Initialising PDL-GAT v6 model...
+
+  Generating 2200 training samples for phase 'easy'...
+  Pre-training: 8 iters, penalty-only at ρ=10.0
+
+  PEGASE1354: FAILED — NVML_SUCCESS == DriverAPI::get()->nvmlInit_v2_() INTERNAL ASSERT FAILED at "/pytorch/c10/cuda/CUDACachingAllocator.cpp":1124, please report a bug to PyTorch. 
+Traceback (most recent call last):
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 2397, in <module>
+    pdl, summary = run_divergence_rescue_experiment(
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 1517, in run_divergence_rescue_experiment
+    pdl.pretrain(P_tr_t, Q_tr_t, n_iters=pretrain_iters,
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 1122, in pretrain
+    Pg, Qg, V, th = self._primal_forward(Pm, Qm)
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 1106, in _primal_forward
+    return self.primal_net(
+  File "/home/psquarlab4/Desktop/teb1/venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/psquarlab4/Desktop/teb1/venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 926, in forward
+    x = layer(x, adj, edge_weights)
+  File "/home/psquarlab4/Desktop/teb1/venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/psquarlab4/Desktop/teb1/venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 855, in forward
+    x = x + self.attn(self.norm1(x), adj, edge_weights)
+  File "/home/psquarlab4/Desktop/teb1/venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/psquarlab4/Desktop/teb1/venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/psquarlab4/Desktop/teb1/teb.py", line 837, in forward
+    attn = self.dropout(attn)
+  File "/home/psquarlab4/Desktop/teb1/venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/psquarlab4/Desktop/teb1/venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/psquarlab4/Desktop/teb1/venv/lib/python3.10/site-packages/torch/nn/modules/dropout.py", line 73, in forward
+    return F.dropout(input, self.p, self.training, self.inplace)
+  File "/home/psquarlab4/Desktop/teb1/venv/lib/python3.10/site-packages/torch/nn/functional.py", line 1441, in dropout
+    _VF.dropout_(input, p, training) if inplace else _VF.dropout(input, p, training)
+RuntimeError: NVML_SUCCESS == DriverAPI::get()->nvmlInit_v2_() INTERNAL ASSERT FAILED at "/pytorch/c10/cuda/CUDACachingAllocator.cpp":1124, please report a bug to PyTorch. 
+
+
+==========================================================================================
+  CROSS-CASE COMPARISON: DIVERGENCE RESCUE SUMMARY
+==========================================================================================
+
+  Case         Test Pts   NR Div  NR Div%  PDL Res    PDL %   NN Res     NN %   DC Res     DC %  PDL Conv%  NN Conv%  DC Conv%  Train (s)
+  ------------------------------------------------------------------------------------------------------------------------
+  IEEE118          1600      257    16.1%      257   100.0%        0     0.0%        0     0.0%     100.0%     83.9%     83.9%     3408.8
+  IEEE300           800      726    90.8%      478    65.8%        0     0.0%        0     0.0%      67.5%      5.9%      9.2%     6657.8
+
+  NARRATIVE:
+  • IEEE118: NR diverges on 16.1% of stressed points. PDL warm-start rescues 100.0% of those, NN warm-start rescues 0.0%, while DCPF-theta warm-start rescues 0.0%.
+  • IEEE300: NR diverges on 90.8% of stressed points. PDL warm-start rescues 65.8% of those, NN warm-start rescues 0.0%, while DCPF-theta warm-start rescues 0.0%.
+
+
+================================================================================
+  ALL DONE
+================================================================================
+
+══════════════════════════════════════════════════════════════════════
+  Beautiful Plots for PDL-GAT v6 Divergence Rescue Results
+══════════════════════════════════════════════════════════════════════
+
+  NOTE: Run this AFTER c6.py in the same Python session.
+  Usage:
+    exec(open('c6_beautiful_plots.py').read())
+  or import and call:
+    from c6_beautiful_plots import generate_all_beautiful_plots
+    figs = generate_all_beautiful_plots(all_summaries)
+    plt.show()
+
+  'all_summaries' not found in scope. Loading from outputs/ ...
+
+  Loaded 4 summaries from outputs
+
+  Generating beautiful plots for IEEE118 ...
+/home/psquarlab4/Desktop/teb1/charts.py:576: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquarlab4/Desktop/teb1/charts.py:1165: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+  Generating beautiful plots for IEEE30 ...
+/home/psquarlab4/Desktop/teb1/charts.py:576: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquarlab4/Desktop/teb1/charts.py:1165: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+  Generating beautiful plots for IEEE300 ...
+/home/psquarlab4/Desktop/teb1/charts.py:576: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquarlab4/Desktop/teb1/charts.py:1165: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+  Generating beautiful plots for IEEE39 ...
+/home/psquarlab4/Desktop/teb1/charts.py:576: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquarlab4/Desktop/teb1/charts.py:1165: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+  Generating cross-case comparison ...
+
+  Saved 44 chart files under outputs/
+  Generated 0 in-memory figures.
+[run_teb] Completed at Fri May 22 02:46:20 AM IST 2026
+[run_teb] Outputs saved under: /home/psquarlab4/Desktop/teb1/outputs

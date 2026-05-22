@@ -80,6 +80,19 @@ def _get_nr_iterations(net):
         return None
 
 
+def _compute_participation_factors(pg_pu, pmax_pu):
+    """Compute participation factors from generator headroom.
+
+    Formula: alpha_i = (Pmax_i - Pg_i) / sum_j (Pmax_j - Pg_j)
+    Returns zeros if the denominator is non-positive.
+    """
+    headroom = pmax_pu - pg_pu
+    denom = float(np.sum(headroom))
+    if denom <= 0.0:
+        return np.zeros_like(headroom, dtype=np.float32)
+    return (headroom / denom).astype(np.float32)
+
+
 plt.rcParams.update({
     'font.size': 12, 'font.family': 'serif',
     'axes.labelsize': 14, 'axes.titlesize': 16,
@@ -626,6 +639,7 @@ def test_nr_convergence(system_data, P_pu, Q_pu, init_mode='flat',
     """
     net_base = system_data['net']
     baseMVA  = system_data['baseMVA']
+    n_gen = system_data['n_generators']
     n_test   = P_pu.shape[0]
     results  = []
 
@@ -656,20 +670,38 @@ def test_nr_convergence(system_data, P_pu, Q_pu, init_mode='flat',
                      max_iteration=max_iter, numba=False)
             elapsed = time.time() - t0
             nri = _get_nr_iterations(net)
+            if hasattr(net, 'res_gen') and len(net.res_gen) >= n_gen:
+                pg = (net.res_gen.p_mw.values[:n_gen] / baseMVA).astype(np.float32)
+            else:
+                pg = (net.gen.p_mw.values[:n_gen] / baseMVA).astype(np.float32)
             results.append(dict(
                 converged=True,
                 iterations=nri if nri is not None else -1,
                 time=elapsed,
                 V=net.res_bus.vm_pu.values.copy(),
                 theta_deg=net.res_bus.va_degree.values.copy(),
+                Pg=pg,
             ))
         except Exception:
             elapsed = time.time() - t0
             results.append(dict(
                 converged=False, iterations=max_iter,
                 time=elapsed, V=None, theta_deg=None,
+                Pg=None,
             ))
     return results
+
+
+def compute_participation_from_results(nr_results, system_data):
+    """Compute participation factors for each converged NR result."""
+    pmax_pu = np.array(system_data['gen_limits']['P_max'], dtype=np.float32)
+    pf_list = []
+    for r in nr_results:
+        if r.get('converged') and r.get('Pg') is not None:
+            pf_list.append(_compute_participation_factors(r['Pg'], pmax_pu))
+        else:
+            pf_list.append(None)
+    return pf_list
 
 
 def build_voltage_init_template(system_data, n_samples):
@@ -1754,6 +1786,9 @@ def run_divergence_rescue_experiment(
           f"{n_warm_div} diverged")
     print(f"  PDL warm-start + NR total time: {nr_warm_time:.1f}s")
 
+    pf_flat = compute_participation_from_results(nr_flat_results, system_data)
+    pf_warm = compute_participation_from_results(nr_warm_results, system_data)
+
     # ------------------------------------------------------------------
     # 6a. Normal NN warm-start + NR on all test points
     # ------------------------------------------------------------------
@@ -1797,6 +1832,9 @@ def run_divergence_rescue_experiment(
               f"converged, {n_nn_div} diverged")
         print(f"  Normal NN warm-start + NR total time: {nr_nn_warm_time:.1f}s")
 
+        pf_nn = compute_participation_from_results(
+            nr_nn_warm_results, system_data)
+
         nn_warm_iters_list = [r['iterations'] for r in nr_nn_warm_results]
         nn_warm_conv_list = [r['converged'] for r in nr_nn_warm_results]
 
@@ -1829,6 +1867,9 @@ def run_divergence_rescue_experiment(
     print(f"  DCPF-theta warm-start + NR: {n_dcopf_warm_conv}/{n_stressed_test} "
           f"converged, {n_dcopf_warm_div} diverged")
     print(f"  DCPF-theta warm-start + NR total time: {nr_dcopf_warm_time:.1f}s")
+
+    pf_dcopf = compute_participation_from_results(
+        nr_dcopf_warm_results, system_data)
 
     # ------------------------------------------------------------------
     # 7. Rescue statistics
@@ -2234,6 +2275,12 @@ def run_divergence_rescue_experiment(
         dcopf_warm_avg_iters=_avg_iters(dcopf_warm_iters_list, dcopf_warm_conv_list),
         history=dict(pdl.history),
         strat_labels=strat_labels,
+        participation_factors=dict(
+            nr_flat=pf_flat,
+            pdl_warm=pf_warm,
+            nn_warm=pf_nn if nn_state is not None else None,
+            dcopf_warm=pf_dcopf,
+        ),
     )
     if V_nr_conv is not None and len(V_nr_conv) > 0:
         summary['V_mse'] = float(V_mse)
@@ -2373,6 +2420,7 @@ def _build_case_report(summary):
         'history': _jsonify(summary.get('history', {})),
         'strat_labels': _jsonify(summary.get('strat_labels', [])),
         'tractability': _jsonify(summary.get('tractability', {})),
+        'participation_factors': _jsonify(summary.get('participation_factors', {})),
     }
     if 'V_mse' in summary:
         report['V_mse'] = float(summary['V_mse'])
@@ -2429,6 +2477,20 @@ def save_case_outputs(case_key, case_label, summary, root_dir='outputs'):
         f.write(f"DCPF-theta rescued: {report['n_rescued_dcopf']} ")
         f.write(f"({report['dcopf_rescue_rate_pct']:.1f}% of NR-divergent)\n")
         f.write(f"DCPF-theta warm convergence: {report['dcopf_warm_conv_rate_pct']:.1f}%\n")
+        pf = report.get('participation_factors', {}) or {}
+
+        def _pf_count(key):
+            vals = pf.get(key)
+            if not vals:
+                return 0
+            return sum(1 for v in vals if v is not None)
+
+        f.write("Participation factors computed (converged):\n")
+        f.write(f"  NR flat: { _pf_count('nr_flat') }/{report['n_stressed_test']}\n")
+        f.write(f"  PDL warm: { _pf_count('pdl_warm') }/{report['n_stressed_test']}\n")
+        if pf.get('nn_warm') is not None:
+            f.write(f"  NN warm: { _pf_count('nn_warm') }/{report['n_stressed_test']}\n")
+        f.write(f"  DCPF warm: { _pf_count('dcopf_warm') }/{report['n_stressed_test']}\n")
         f.write(f"Training time: {report['training_time_s']:.1f}s\n")
         f.write(f"NR-failed train points: {report['nr_failed_train_points']}\n")
         f.write(f"Hard retrain applied: {report['hard_retrain_applied']}\n")

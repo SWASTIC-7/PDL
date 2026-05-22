@@ -31,12 +31,24 @@ import re
 import urllib.request
 import tempfile
 from collections import defaultdict
+import logging
 import pandapower as pp
 import pandapower.networks as nw
 from pandapower.pypower.makeYbus import makeYbus
 from pandapower.converter import from_ppc
 import warnings
 warnings.filterwarnings("ignore")
+
+
+class _DropPandapowerNumbaWarning(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        return 'numba cannot be imported and numba functions are disabled.' not in msg
+
+
+_pp_numba_filter = _DropPandapowerNumbaWarning()
+logging.getLogger('pandapower').addFilter(_pp_numba_filter)
+logging.getLogger('pandapower.auxiliary').addFilter(_pp_numba_filter)
 
 try:
     pd.options.mode.copy_on_write = False
@@ -84,7 +96,8 @@ def get_pandapower_data(net, case_name):
     print(f"  Loading data from pandapower: {case_name}")
     try:
         pp.runpp(net, calculate_voltage_angles=False,
-                 enforce_q_limits=False, enforce_v_limits=False, init='flat')
+             enforce_q_limits=False, enforce_v_limits=False, init='flat',
+             numba=False)
     except Exception:
         pass
 
@@ -367,7 +380,9 @@ def generate_api_test_scenarios(ppc, system_data, n_samples,
     return P, Q, labels
 
 
-def generate_mixed_training_with_api(system_data, ppc_api, n_samples):
+def generate_mixed_training_with_api(system_data, ppc_api, n_samples,
+                                     stressed_range=(1.2, 1.8),
+                                     api_variation=0.20):
     """Training data: 50% normal, 25% synthetic stressed, 25% API-derived."""
     n_normal = int(n_samples * 0.50)
     n_synth  = int(n_samples * 0.25)
@@ -376,15 +391,24 @@ def generate_mixed_training_with_api(system_data, ppc_api, n_samples):
     P_n, Q_n = generate_load_scenarios(system_data, n_normal, 0.3)
     P_s, Q_s, _ = generate_stressed_scenarios(
         system_data, n_synth,
-        load_multiplier_range=(1.2, 1.8), bus_variation=0.2)
+        load_multiplier_range=stressed_range, bus_variation=0.2)
     P_a, Q_a, _ = generate_api_test_scenarios(
         ppc_api, system_data, n_api,
-        variation=0.20)
+        variation=api_variation)
 
     P = np.concatenate([P_n, P_s, P_a], axis=0)
     Q = np.concatenate([Q_n, Q_s, Q_a], axis=0)
     idx = np.random.permutation(n_samples)
     return P[idx], Q[idx]
+
+
+def build_curriculum_phases():
+    """Return default curriculum phases from easier to harder."""
+    return [
+        dict(label='easy', stressed_range=(1.05, 1.30), api_variation=0.10),
+        dict(label='medium', stressed_range=(1.15, 1.55), api_variation=0.15),
+        dict(label='hard', stressed_range=(1.25, 1.90), api_variation=0.20),
+    ]
 
 
 # ======================================================================
@@ -534,7 +558,7 @@ def test_nr_convergence(system_data, P_pu, Q_pu, init_mode='flat',
         try:
             pp.runpp(net, init=pp_init, calculate_voltage_angles=True,
                      enforce_q_limits=False, enforce_v_limits=False,
-                     max_iteration=max_iter)
+                     max_iteration=max_iter, numba=False)
             elapsed = time.time() - t0
             nri = _get_nr_iterations(net)
             results.append(dict(
@@ -596,7 +620,7 @@ def run_dcopf_theta_batch(system_data, P_pu, Q_pu):
         try:
             if not has_dcpf:
                 raise RuntimeError("pandapower.rundcpp is unavailable")
-            pp.rundcpp(net)
+            pp.rundcpp(net, numba=False)
 
             if 'va_degree' in net.res_bus.columns:
                 theta_deg[i] = net.res_bus.va_degree.values.astype(np.float32)
@@ -671,7 +695,7 @@ def build_supervised_nr_targets(system_data, P_pu, Q_pu,
         try:
             pp.runpp(net, init='flat', calculate_voltage_angles=True,
                      enforce_q_limits=False, enforce_v_limits=False,
-                     max_iteration=nr_max_iter)
+                     max_iteration=nr_max_iter, numba=False)
             pg = (net.res_gen.p_mw.values[:n_gen] / baseMVA).astype(np.float32)
             v = net.res_bus.vm_pu.values.astype(np.float32)
             th = net.res_bus.va_degree.values.astype(np.float32)
@@ -1251,6 +1275,12 @@ def get_memory_safe_case_config(case_key, n_buses):
         nn_batch_size=256 if use_cuda else 128,
         model_kwargs=dict(d_model=64, n_heads=4,
                           n_layers_primal=4, n_layers_dual=2),
+        curriculum_phases=build_curriculum_phases(),
+        curriculum_outer_iters=None,
+        retrain_on_failed=True,
+        retrain_top_frac=0.25,
+        retrain_iters=8,
+        retrain_inner_iters=80,
     )
 
     if n_buses >= 1000 or case_key == 'case1354pegase':
@@ -1270,6 +1300,8 @@ def get_memory_safe_case_config(case_key, n_buses):
             nn_batch_size=64 if use_cuda else 24,
             model_kwargs=dict(d_model=40, n_heads=4,
                               n_layers_primal=3, n_layers_dual=2),
+            retrain_iters=6,
+            retrain_inner_iters=60,
         ))
     elif n_buses >= 250 or case_key == 'case300':
         cfg.update(dict(
@@ -1287,11 +1319,13 @@ def get_memory_safe_case_config(case_key, n_buses):
             nn_batch_size=96 if use_cuda else 48,
             model_kwargs=dict(d_model=48, n_heads=4,
                               n_layers_primal=3, n_layers_dual=2),
+            retrain_iters=7,
+            retrain_inner_iters=70,
         ))
     elif n_buses >= 100:
         cfg.update(dict(
             n_train=7000,
-            n_stressed_test=1400,
+            n_stressed_test=1600,
             max_outer_iters=80,
             train_inner_iters=120,
             train_batch_size=512 if use_cuda else 128,
@@ -1303,6 +1337,8 @@ def get_memory_safe_case_config(case_key, n_buses):
             nn_batch_size=192 if use_cuda else 96,
             model_kwargs=dict(d_model=56, n_heads=4,
                               n_layers_primal=4, n_layers_dual=2),
+            retrain_iters=8,
+            retrain_inner_iters=80,
         ))
 
     return cfg
@@ -1349,6 +1385,28 @@ def pdl_predict_chunked(pdl, P_np, Q_np, device,
     )
 
 
+def pdl_violation_per_sample(pdl, P_np, Q_np, device, chunk_size=256):
+    """Compute per-sample max violation for filtering hard cases."""
+    n = P_np.shape[0]
+    viol = np.zeros(n, dtype=np.float32)
+    for s in range(0, n, chunk_size):
+        e = min(s + chunk_size, n)
+        P_t = torch.tensor(P_np[s:e], dtype=torch.float32, device=device)
+        Q_t = torch.tensor(Q_np[s:e], dtype=torch.float32, device=device)
+        with torch.no_grad():
+            Pg, Qg, V, th = pdl.predict(P_t, Q_t)
+            Pv, Qv = pdl.compute_power_balance(Pg, Qg, V, th, P_t, Q_t)
+            mv = torch.max(torch.stack([
+                torch.max(torch.abs(Pv), dim=1).values,
+                torch.max(torch.abs(Qv), dim=1).values,
+            ], dim=1), dim=1).values
+        viol[s:e] = mv.cpu().numpy().astype(np.float32)
+        del P_t, Q_t, Pg, Qg, V, th, Pv, Qv, mv
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    return viol
+
+
 # ======================================================================
 # Main experiment runner
 # ======================================================================
@@ -1367,7 +1425,13 @@ def run_divergence_rescue_experiment(
     model_kwargs=None,
     nn_supervised_samples=1500,
     nn_epochs=40,
-    nn_batch_size=256):
+    nn_batch_size=256,
+    curriculum_phases=None,
+    curriculum_outer_iters=None,
+    retrain_on_failed=True,
+    retrain_top_frac=0.25,
+    retrain_iters=8,
+    retrain_inner_iters=80):
     """Full pipeline: train PDL-GAT → test on PGLIB API stressed points → rescue."""
 
     print(f"\n{'=' * 80}")
@@ -1392,14 +1456,33 @@ def run_divergence_rescue_experiment(
           f"{system_data['n_generators']} gens")
 
     # ------------------------------------------------------------------
-    # 1. Generate training data (mixed normal + stressed + API)
+    # 1. Curriculum training data (easy -> hard)
     # ------------------------------------------------------------------
-    print(f"\n  Generating {n_train} mixed training samples "
-          f"(incl. PGLIB API-derived)...")
-    P_tr, Q_tr = generate_mixed_training_with_api(
-        system_data, ppc_api, n_train)
-    P_tr_t = torch.tensor(P_tr, dtype=torch.float32, device=device)
-    Q_tr_t = torch.tensor(Q_tr, dtype=torch.float32, device=device)
+    phases = curriculum_phases if curriculum_phases is not None else build_curriculum_phases()
+    if not phases:
+        phases = [dict(label='single', stressed_range=(1.2, 1.8), api_variation=0.20)]
+
+    if curriculum_outer_iters is None:
+        per_phase = max(1, max_outer_iters // len(phases))
+        per_phase_iters = [per_phase] * len(phases)
+        remainder = max_outer_iters - sum(per_phase_iters)
+        for i in range(remainder):
+            per_phase_iters[i % len(phases)] += 1
+    elif isinstance(curriculum_outer_iters, (list, tuple)):
+        per_phase_iters = list(curriculum_outer_iters)
+    else:
+        per_phase_iters = [int(curriculum_outer_iters)] * len(phases)
+
+    print(f"\n  Curriculum phases: {len(phases)}")
+    for i, ph in enumerate(phases):
+        print(f"    {i + 1}. {ph.get('label', 'phase')} "
+              f"range={ph['stressed_range']}, api_var={ph['api_variation']} "
+              f"iters={per_phase_iters[i]}")
+
+    P_tr = None
+    Q_tr = None
+    P_tr_t = None
+    Q_tr_t = None
 
     # ------------------------------------------------------------------
     # 2. Initialise and train PDL-GAT
@@ -1414,26 +1497,43 @@ def run_divergence_rescue_experiment(
         warmup_iters=15, rho_check_freq=3,
     )
 
-    # Pre-training
-    t0_pre = time.time()
-    pdl.pretrain(P_tr_t, Q_tr_t, n_iters=pretrain_iters,
-                 rho_pre=10.0, batch_size=train_batch_size)
-    pretrain_time = time.time() - t0_pre
-    print(f"  Pre-training done in {pretrain_time:.1f}s")
-
-    # Main PDL training
-    print(f"\n  PDL training (threshold: {convergence_threshold} p.u.)...")
-    print("-" * 80)
+    # Pre-training and curriculum training
+    pretrain_time = 0.0
+    tr_time = 0.0
     t0 = time.time()
     k, max_viol = 0, float('inf')
-    while max_viol > convergence_threshold and k < max_outer_iters:
-        _, max_viol = pdl.train_epoch(
-            P_tr_t, Q_tr_t, inner_iters=train_inner_iters,
-            batch_size=train_batch_size, accum_steps=train_accum_steps)
-        if k % 5 == 0:
-            print(f"  Iter {k + 1:3d}: Max Viol={max_viol:.6e} p.u., "
-                  f"ρ={pdl.rho:.1f}")
-        k += 1
+    for ph_i, phase in enumerate(phases):
+        print(f"\n  Generating {n_train} training samples for "
+              f"phase '{phase.get('label', ph_i + 1)}'...")
+        P_tr, Q_tr = generate_mixed_training_with_api(
+            system_data, ppc_api, n_train,
+            stressed_range=phase['stressed_range'],
+            api_variation=phase['api_variation'])
+        P_tr_t = torch.tensor(P_tr, dtype=torch.float32, device=device)
+        Q_tr_t = torch.tensor(Q_tr, dtype=torch.float32, device=device)
+
+        if ph_i == 0 and pretrain_iters > 0:
+            t0_pre = time.time()
+            pdl.pretrain(P_tr_t, Q_tr_t, n_iters=pretrain_iters,
+                         rho_pre=10.0, batch_size=train_batch_size)
+            pretrain_time = time.time() - t0_pre
+            print(f"  Pre-training done in {pretrain_time:.1f}s")
+
+        print(f"  PDL training phase '{phase.get('label', ph_i + 1)}' "
+              f"(threshold: {convergence_threshold} p.u.)...")
+        print("-" * 80)
+        phase_iters = per_phase_iters[ph_i] if ph_i < len(per_phase_iters) else per_phase_iters[-1]
+        for it in range(phase_iters):
+            _, max_viol = pdl.train_epoch(
+                P_tr_t, Q_tr_t, inner_iters=train_inner_iters,
+                batch_size=train_batch_size, accum_steps=train_accum_steps)
+            if k % 5 == 0:
+                print(f"  Iter {k + 1:3d}: Max Viol={max_viol:.6e} p.u., "
+                      f"ρ={pdl.rho:.1f}")
+            k += 1
+            if max_viol <= convergence_threshold:
+                break
+
     tr_time = time.time() - t0
     total_train_time = pretrain_time + tr_time
     print(f"\n  Training done: {k} iters in {tr_time:.1f}s "
@@ -1504,6 +1604,53 @@ def run_divergence_rescue_experiment(
     print(f"  PDL inference: {pdl_inf_time*1000:.1f} ms "
           f"({pdl_inf_time*1000/n_stressed_test:.4f} ms/sample)")
     print(f"  PDL max violations: P={pdl_max_Pv:.4e}, Q={pdl_max_Qv:.4e}")
+
+    # ------------------------------------------------------------------
+    # 5b. Retrain on failed high-divergence points
+    # ------------------------------------------------------------------
+    retrain_samples = 0
+    retrain_time = 0.0
+    if retrain_on_failed and retrain_iters > 0:
+        print(f"\n  Selecting failed high-divergence points for retrain...")
+        viol = pdl_violation_per_sample(
+            pdl, P_te, Q_te, device,
+            chunk_size=inference_chunk_size)
+        failed_mask = np.array([not r['converged'] for r in nr_flat_results], dtype=bool)
+        if np.any(failed_mask):
+            cutoff = np.quantile(viol[failed_mask], 1.0 - retrain_top_frac)
+            hard_idx = np.where(failed_mask & (viol >= cutoff))[0]
+            retrain_samples = int(len(hard_idx))
+            if retrain_samples > 0:
+                print(f"  Retraining on {retrain_samples} hard points "
+                      f"(top {retrain_top_frac*100:.0f}% divergence of failed set)")
+                P_hard = torch.tensor(P_te[hard_idx], dtype=torch.float32, device=device)
+                Q_hard = torch.tensor(Q_te[hard_idx], dtype=torch.float32, device=device)
+                t0_retrain = time.time()
+                for ri in range(retrain_iters):
+                    _, max_viol = pdl.train_epoch(
+                        P_hard, Q_hard, inner_iters=retrain_inner_iters,
+                        batch_size=train_batch_size, accum_steps=train_accum_steps)
+                    if ri % 3 == 0 or ri == retrain_iters - 1:
+                        print(f"    Retrain iter {ri + 1:2d}/{retrain_iters}: "
+                              f"max_viol={max_viol:.4e}")
+                retrain_time = time.time() - t0_retrain
+                total_train_time += retrain_time
+                print(f"  Retrain time: {retrain_time:.1f}s "
+                      f"(total training time {total_train_time:.1f}s)")
+
+                print(f"  Re-running PDL inference after retrain...")
+                pdl_pred = pdl_predict_chunked(
+                    pdl, P_te, Q_te, device,
+                    chunk_size=inference_chunk_size,
+                    compute_violation=True)
+                pdl_inf_time = pdl_pred['elapsed']
+                V_pdl_np   = pdl_pred['V']
+                th_pdl_deg = pdl_pred['theta_deg']
+                Pg_pdl_np  = pdl_pred['Pg']
+                pdl_max_Pv = pdl_pred['max_P_viol']
+                pdl_max_Qv = pdl_pred['max_Q_viol']
+        else:
+            print("  No failed flat-start points found; retrain skipped.")
 
     # ------------------------------------------------------------------
     # 6. PDL warm-start + NR on all test points
@@ -1927,6 +2074,7 @@ def run_divergence_rescue_experiment(
         n_train=n_train,
         n_stressed_test=n_stressed_test,
         training_time=total_train_time,
+            retrain_time=retrain_time,
         convergence_iters=k,
         final_violation=max_viol,
         # NR flat
@@ -1996,6 +2144,11 @@ def run_divergence_rescue_experiment(
         dcopf_warm_avg_iters=_avg_iters(dcopf_warm_iters_list, dcopf_warm_conv_list),
         history=dict(pdl.history),
         strat_labels=strat_labels,
+        retrain_on_failed=bool(retrain_on_failed),
+        retrain_top_frac=float(retrain_top_frac),
+        retrain_iters=int(retrain_iters),
+        retrain_inner_iters=int(retrain_inner_iters),
+        retrain_samples=int(retrain_samples),
     )
     if V_nr_conv is not None and len(V_nr_conv) > 0:
         summary['V_mse'] = float(V_mse)
@@ -2071,6 +2224,7 @@ def _build_case_report(summary):
         'n_train': int(summary.get('n_train', 0)),
         'n_stressed_test': int(summary.get('n_stressed_test', 0)),
         'training_time_s': float(summary.get('training_time', 0.0)),
+        'retrain_time_s': float(summary.get('retrain_time', 0.0)),
         'convergence_iters': int(summary.get('convergence_iters', 0)),
         'final_violation_pu': float(summary.get('final_violation', 0.0)),
         'nr_flat_converged': int(summary.get('nr_flat_converged', 0)),
@@ -2128,6 +2282,11 @@ def _build_case_report(summary):
         'history': _jsonify(summary.get('history', {})),
         'strat_labels': _jsonify(summary.get('strat_labels', [])),
         'tractability': _jsonify(summary.get('tractability', {})),
+        'retrain_on_failed': bool(summary.get('retrain_on_failed', False)),
+        'retrain_top_frac': float(summary.get('retrain_top_frac', 0.0)),
+        'retrain_iters': int(summary.get('retrain_iters', 0)),
+        'retrain_inner_iters': int(summary.get('retrain_inner_iters', 0)),
+        'retrain_samples': int(summary.get('retrain_samples', 0)),
     }
     if 'V_mse' in summary:
         report['V_mse'] = float(summary['V_mse'])
@@ -2184,6 +2343,10 @@ def save_case_outputs(case_key, case_label, summary, root_dir='outputs'):
         f.write(f"DCPF-theta rescued: {report['n_rescued_dcopf']} ")
         f.write(f"({report['dcopf_rescue_rate_pct']:.1f}% of NR-divergent)\n")
         f.write(f"DCPF-theta warm convergence: {report['dcopf_warm_conv_rate_pct']:.1f}%\n")
+        f.write(f"Retrain on failed: {report['retrain_on_failed']} ")
+        f.write(f"| samples={report['retrain_samples']} ")
+        f.write(f"| iters={report['retrain_iters']}\n")
+        f.write(f"Retrain time: {report['retrain_time_s']:.1f}s\n")
         f.write(f"Training time: {report['training_time_s']:.1f}s\n")
         f.write(f"Final violation: {report['final_violation_pu']:.4e} p.u.\n")
 
@@ -2251,6 +2414,12 @@ if __name__ == "__main__":
                 nn_supervised_samples=case_cfg['nn_supervised_samples'],
                 nn_epochs=case_cfg['nn_epochs'],
                 nn_batch_size=case_cfg['nn_batch_size'],
+                curriculum_phases=case_cfg.get('curriculum_phases'),
+                curriculum_outer_iters=case_cfg.get('curriculum_outer_iters'),
+                retrain_on_failed=case_cfg.get('retrain_on_failed', True),
+                retrain_top_frac=case_cfg.get('retrain_top_frac', 0.25),
+                retrain_iters=case_cfg.get('retrain_iters', 8),
+                retrain_inner_iters=case_cfg.get('retrain_inner_iters', 80),
             )
             all_summaries.append(summary)
             case_out_dir = save_case_outputs(

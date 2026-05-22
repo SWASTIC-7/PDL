@@ -1,0 +1,58 @@
+[run_teb] Starting pipeline at Fri May 22 04:00:15 PM IST 2026
+[run_teb] Workspace: /home/psquarlab4/Desktop/teb1
+[run_teb] Log file: /home/psquarlab4/Desktop/teb1/outputs/logs/teb_run_20260522_160015.log
+
+================================================================================
+  PDL-GAT v6 — Divergence Rescue on Stressed Operating Points
+  Self-supervised transformer warm-start for Newton-Raphson
+================================================================================
+  Output directory: /home/psquarlab4/Desktop/teb1/outputs
+  Loading data from pandapower: case39
+  System: 39 buses, 9 generators, 21 loads
+  Base MVA: 100, Slack: 30, PV: 9, PQ: 29
+
+  Memory-safe config for case39: 
+    n_train=10000, n_test=2000, batch=1024, chunk=512, nn_sup=1500, sweep=500x7, model={'d_model': 64, 'n_heads': 4, 'n_layers_primal': 4, 'n_layers_dual': 2}
+
+  Loading PGLIB-OPF API file for case39...
+  PGLIB cache hit: /home/psquarlab4/Desktop/teb1/pglib_cache/pglib_opf_case39_epri__api.m
+  Parsed MATPOWER file: 39 buses, 10 gens, 46 branches
+  baseMVA = 100.0
+There are 11 branches which are considered as trafos - due to ratio unequal 0 or 1 - but connect same voltage levels.
+
+================================================================================
+  DIVERGENCE RESCUE EXPERIMENT: IEEE39
+================================================================================
+
+  CONFIG:
+  - Architecture: GAT + Global Attention (same as c5)
+  - Adaptive ρ: init=1, max=500, α=1.2, τ=0.9, warmup=15, freq=3
+  - Pre-training: 15 iters penalty-only at ρ=10
+  - Training data: 10000 curriculum (normal → mild stress → mixed → hard)
+  - Test data: 2000 PGLIB API-derived stressed scenarios
+  - NR max iterations: 30
+  - Train batch size: 1024, accum steps: 10
+  - Inference chunk size: 512
+  - Stress sweep samples per level: 500
+  - Data source: PGLIB-OPF API tier (Active Power Increase)
+  - Post-train hard-mining: retrain on NR-failed training points
+  - Normal NN baseline: supervised MSE on NR labels
+  Device: cuda
+  System: 39 buses, 9 gens
+
+  Generating 10000 curriculum training samples...
+    Stage 1: stage1_normal with 2500 samples
+    Stage 2: stage2_mild_stress with 2500 samples
+    Stage 3: stage3_balanced_mix with 3000 samples
+    Stage 4: stage4_hard_stress with 2000 samples
+  Initialising PDL-GAT v6 model...
+  Pre-training: 15 iters, penalty-only at ρ=10.0
+    pre-train iter  5: max_viol=2.9912e+01 p.u., ρ_pre=10.0
+    pre-train iter 10: max_viol=1.4211e+01 p.u., ρ_pre=10.0
+    pre-train iter 15: max_viol=9.3166e+00 p.u., ρ_pre=10.0
+  Pre-training done in 1.9s
+
+  PDL curriculum training (final threshold: 0.0001 p.u.)...
+--------------------------------------------------------------------------------
+  Curriculum stage 1/4: stage1_normal (n=2500, budget=20, thr=1.0e-03)
+  Iter   1: Stage=stage1_normal, Max Viol=6.494438e+00 p.u., ρ=1.0
