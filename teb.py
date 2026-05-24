@@ -80,6 +80,19 @@ def _get_nr_iterations(net):
         return None
 
 
+def _compute_participation_factors(pg_pu, pmax_pu):
+    """Compute participation factors from generator headroom.
+
+    Formula: alpha_i = (Pmax_i - Pg_i) / sum_j (Pmax_j - Pg_j)
+    Returns zeros if the denominator is non-positive.
+    """
+    headroom = pmax_pu - pg_pu
+    denom = float(np.sum(headroom))
+    if denom <= 0.0:
+        return np.zeros_like(headroom, dtype=np.float32)
+    return (headroom / denom).astype(np.float32)
+
+
 plt.rcParams.update({
     'font.size': 12, 'font.family': 'serif',
     'axes.labelsize': 14, 'axes.titlesize': 16,
@@ -531,6 +544,7 @@ def test_nr_convergence(system_data, P_pu, Q_pu, init_mode='flat',
     """
     net_base = system_data['net']
     baseMVA  = system_data['baseMVA']
+    n_gen = system_data['n_generators']
     n_test   = P_pu.shape[0]
     results  = []
 
@@ -561,20 +575,38 @@ def test_nr_convergence(system_data, P_pu, Q_pu, init_mode='flat',
                      max_iteration=max_iter, numba=False)
             elapsed = time.time() - t0
             nri = _get_nr_iterations(net)
+            if hasattr(net, 'res_gen') and len(net.res_gen) >= n_gen:
+                pg = (net.res_gen.p_mw.values[:n_gen] / baseMVA).astype(np.float32)
+            else:
+                pg = (net.gen.p_mw.values[:n_gen] / baseMVA).astype(np.float32)
             results.append(dict(
                 converged=True,
                 iterations=nri if nri is not None else -1,
                 time=elapsed,
                 V=net.res_bus.vm_pu.values.copy(),
                 theta_deg=net.res_bus.va_degree.values.copy(),
+                Pg=pg,
             ))
         except Exception:
             elapsed = time.time() - t0
             results.append(dict(
                 converged=False, iterations=max_iter,
                 time=elapsed, V=None, theta_deg=None,
+                Pg=None,
             ))
     return results
+
+
+def compute_participation_from_results(nr_results, system_data):
+    """Compute participation factors for each converged NR result."""
+    pmax_pu = np.array(system_data['gen_limits']['P_max'], dtype=np.float32)
+    pf_list = []
+    for r in nr_results:
+        if r.get('converged') and r.get('Pg') is not None:
+            pf_list.append(_compute_participation_factors(r['Pg'], pmax_pu))
+        else:
+            pf_list.append(None)
+    return pf_list
 
 
 def build_voltage_init_template(system_data, n_samples):
@@ -1671,6 +1703,8 @@ def run_divergence_rescue_experiment(
           f"{n_warm_div} diverged")
     print(f"  PDL warm-start + NR total time: {nr_warm_time:.1f}s")
 
+    pf_warm = compute_participation_from_results(nr_warm_results, system_data)
+
     # ------------------------------------------------------------------
     # 6a. Normal NN warm-start + NR on all test points
     # ------------------------------------------------------------------
@@ -2149,6 +2183,9 @@ def run_divergence_rescue_experiment(
         retrain_iters=int(retrain_iters),
         retrain_inner_iters=int(retrain_inner_iters),
         retrain_samples=int(retrain_samples),
+        participation_factors=dict(
+            pdl_warm=pf_warm,
+        ),
     )
     if V_nr_conv is not None and len(V_nr_conv) > 0:
         summary['V_mse'] = float(V_mse)
@@ -2287,6 +2324,7 @@ def _build_case_report(summary):
         'retrain_iters': int(summary.get('retrain_iters', 0)),
         'retrain_inner_iters': int(summary.get('retrain_inner_iters', 0)),
         'retrain_samples': int(summary.get('retrain_samples', 0)),
+        'participation_factors': _jsonify(summary.get('participation_factors', {})),
     }
     if 'V_mse' in summary:
         report['V_mse'] = float(summary['V_mse'])
@@ -2343,6 +2381,16 @@ def save_case_outputs(case_key, case_label, summary, root_dir='outputs'):
         f.write(f"DCPF-theta rescued: {report['n_rescued_dcopf']} ")
         f.write(f"({report['dcopf_rescue_rate_pct']:.1f}% of NR-divergent)\n")
         f.write(f"DCPF-theta warm convergence: {report['dcopf_warm_conv_rate_pct']:.1f}%\n")
+        pf = report.get('participation_factors', {}) or {}
+
+        def _pf_count(key):
+            vals = pf.get(key)
+            if not vals:
+                return 0
+            return sum(1 for v in vals if v is not None)
+
+        f.write("Participation factors computed (converged):\n")
+        f.write(f"  PDL warm: { _pf_count('pdl_warm') }/{report['n_stressed_test']}\n")
         f.write(f"Retrain on failed: {report['retrain_on_failed']} ")
         f.write(f"| samples={report['retrain_samples']} ")
         f.write(f"| iters={report['retrain_iters']}\n")
