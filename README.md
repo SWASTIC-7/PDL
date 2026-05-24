@@ -6,9 +6,8 @@ The observations to be written in the report
 ## Key point to highlight in the report
 - Explain the self-supervised learning and how are we achieving this in Power flow
 - Doing warm start, hence accuracy of the answer is no question here
-
--Uses PGLIB-OPF API-tier MATPOWER cases (near-collapse / stressed) downloaded + cached automatically (great for paper reproducibility claims).
--GAT architecture here: it learns bus-to-bus interactions directly over the physical grid graph (adjacency + edge weights from |Y_{bus}|), so the model's message passing follows electrical connectivity and can adaptively focus attention on the most influential neighboring buses—making the warm-start robust under stressed operating conditions.
+- Uses PGLIB-OPF API-tier MATPOWER cases (near-collapse / stressed) downloaded + cached automatically (great for paper reproducibility claims).
+- GAT architecture here: it learns bus-to-bus interactions directly over the physical grid graph (adjacency + edge weights from |Y_{bus}|), so the model's message passing follows electrical connectivity and can adaptively focus attention on the most influential neighboring buses—making the warm-start robust under stressed operating conditions.
 - all the metrics to highlight
 
 We are using case 39, 118, 300, 1000 (still needed to be run)
