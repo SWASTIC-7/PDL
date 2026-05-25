@@ -77,6 +77,12 @@ here case 300 converges in flat NR also for most of the cases, therefore need no
 These graphs shows the sweep test with sweep points 0.6, 0.7. 0.8, 0.9, 1, 1.1, 1.2
 (**Needed to discuss with parikshit sir which cases to be shown in report**)
 
+## participation factor 
+![](./assets/chart_participation_dots_300.png)
+![](./assets/chart_participation_dots_118.png)
+![](./assets/chart_participation_dots_39.png)
+
+(**needed to discuss with parikshit sir -- what to do whith this**)
 
 We also have the graph which can show the data across all the cases (bus-system), for average iteration count and inference time -- (**need to fix those graph, but it onlu compare with NR**) 
 
