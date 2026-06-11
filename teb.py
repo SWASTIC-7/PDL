@@ -149,6 +149,12 @@ def get_pandapower_data(net, case_name):
         'Q_max': net.gen.max_q_mvar.values / baseMVA,
     }
 
+    # Scheduled real-power injection at PV generators (power-flow convention:
+    # Pg is FIXED at the setpoint at PV buses; only the slack absorbs the
+    # mismatch). Aligned with gen_buses / n_generators order. Held fixed across
+    # load samples, exactly as the NR reference (runpp varies loads only).
+    gen_P_setpoints = (net.gen.p_mw.values / baseMVA).astype(np.float32)
+
     adj = (np.abs(Y_bus) > 1e-8).astype(np.float32)
     np.fill_diagonal(adj, 1.0)
     y_mag = np.abs(Y_bus).astype(np.float32)
@@ -165,6 +171,7 @@ def get_pandapower_data(net, case_name):
         gen_buses=gen_buses, slack_bus=slack_bus,
         pv_buses=pv_buses, pq_buses=pq_buses,
         gen_voltage_setpoints=gen_voltage_setpoints,
+        gen_P_setpoints=gen_P_setpoints,
         Y_bus=Y_bus, adj=adj, y_mag=y_mag,
         base_P_demand_pu=base_P / baseMVA,
         base_Q_demand_pu=base_Q / baseMVA,
@@ -894,7 +901,7 @@ class GATBlock(nn.Module):
 # ======================================================================
 class ACPFPrimalGAT(nn.Module):
     def __init__(self, n_buses, n_generators, pq_buses, pv_buses,
-                 gen_buses, slack_bus,
+                 gen_buses, slack_bus, gen_P_setpoints,
                  d_model=64, n_heads=4, n_layers=4,
                  max_angle_rad=np.pi / 2.0):
         super().__init__()
@@ -909,6 +916,15 @@ class ACPFPrimalGAT(nn.Module):
         self.slack_bus = int(slack_bus)
         self.non_slack = sorted(i for i in range(n_buses) if i != self.slack_bus)
         self.n_pq = len(self.pq_buses)
+
+        # Pg is FIXED at the scheduled setpoint at PV generators (power-flow
+        # bus-type masking). It is NOT a free output: letting Pg float would
+        # let the net zero the P-residual via Pg := P(x) + Pd for any theta,
+        # making the formulation degenerate. The slack bus absorbs the
+        # mismatch (its residual is masked out in compute_power_balance).
+        self.register_buffer(
+            'Pg_setpoints',
+            torch.as_tensor(gen_P_setpoints, dtype=torch.float32))
 
         self.node_embed = nn.Sequential(
             nn.Linear(2, d_model), nn.GELU(), nn.Linear(d_model, d_model),
@@ -937,7 +953,7 @@ class ACPFPrimalGAT(nn.Module):
                 nn.Linear(d_model // 2, 1),
             )
 
-        self.pg_head    = head()
+        # No pg_head: Pg is held at its setpoint at PV buses (see Pg_setpoints).
         self.qg_head    = head()
         self.theta_head = head()
         if self.n_pq > 0:
@@ -963,9 +979,8 @@ class ACPFPrimalGAT(nn.Module):
         x = self.final_norm(x)
 
         gen_feat = x[:, self.gen_buses, :]
-        P_min = torch.tensor(gen_limits['P_min'], device=device, dtype=torch.float32)
-        P_max = torch.tensor(gen_limits['P_max'], device=device, dtype=torch.float32)
-        Pg = P_min + torch.sigmoid(self.pg_head(gen_feat).squeeze(-1)) * (P_max - P_min)
+        # Pg fixed at the scheduled setpoint at PV buses (not a free variable).
+        Pg = self.Pg_setpoints.to(device).unsqueeze(0).expand(B, -1)
 
         Q_min = torch.tensor(gen_limits['Q_min'], device=device, dtype=torch.float32)
         Q_max = torch.tensor(gen_limits['Q_max'], device=device, dtype=torch.float32)
@@ -1065,6 +1080,7 @@ class PDL_ACPF_GAT:
         self.primal_net = ACPFPrimalGAT(
             self.n_buses, self.n_generators,
             self.pq_buses, self.pv_buses, self.gen_buses, self.slack_bus,
+            system_data['gen_P_setpoints'],
             d_model=d_model, n_heads=n_heads, n_layers=n_layers_primal,
             max_angle_rad=max_angle_rad,
         ).to(device)
