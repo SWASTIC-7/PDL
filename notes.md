@@ -1,5 +1,53 @@
 So we have few things to highlight
 
+
+# Introduction
+Alternating current power flow (ACPF) analysis involves the 
+computation of the bus voltages magnitudes and angles and it 
+gives insight into the steady-state condition of the power system 
+at a particular operating condition. Because of the non-linearity of the power equations, practical industry applications rely mostly on the iterative solvers like Newton_Raphson (NR). However, mathematical reliability of the NR is completely govern by the intial starting point. Classical method "flat start" have standard initialization of V = 1.0 p.u., θ = 0◦, which stuggles to converge in heavily-stressed systems. To mitigate this reseaarchers have tried several methods.
+
+## Related Work
+For instance, Chen and
+Tate [?] introduced a framework mapping linearized DC
+power flow approximations to initial AC operating points
+using one-dimensional convolutional neural networks (1D-
+CNNs). Similarly, Okhuegbe et al. [?] developed dense deep
+neural network initializers coupled with data re-training loops
+and downstream Homotopy Continuation numerical stepping
+mechanisms to force tracking convergence on large-scale
+grids. However, these pure supervised architectures suffer from
+a critical, paradoxical limitation: they require a vast database
+of pre-solved, fully converged Newton-Raphson target labels
+to train the machine learning model intended to fix Newton-
+Raphson failures. 
+
+To solve this, researchers have explored
+the integration of physical laws directly into deep learning
+objective functions. Traditional physics-informed neural net-
+works (PINNs) minimize the physical power balance viola-
+tions through soft L2-norm regularization penalties appended
+to empirical loss functions [?], while generic mathematical
+formulations like the Primal-Dual Learning (PDL) framework
+[?] use Augmented Lagrangian trajectories to optimize generic
+constrained metrics without target labels. Nevertheless, tradi-
+tional PINN formulations are structurally unconstrained; they
+often sacrifice hard engineering limits (such as active/reactive
+generator bounds) during extreme loading periods if minimiz-
+ing the global loss field is mathematically easier.
+
+Our framework bridges this gap by introducing a Physics-
+Biased Graph Attention Network with Self-Supervised Primal-
+Dual Learning (ACPFPrimalGAT + PDL). By hard-masking
+multi-head self-attention paths via the physical admittance
+structure and enforcing hard operational limits directly within
+the architectural activation bounds, the proposed model elim-
+inates the supervised label-dependency trap entirely while
+providing rigorous physical convergence guarantees under
+near-collapse senarios.
+
+# Methedology
+
 ## Self supervised learning
 
 (here i explain why and hwo self supervised learning, explains methamatically how are we acheiving this)
