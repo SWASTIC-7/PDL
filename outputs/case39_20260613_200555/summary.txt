@@ -1,0 +1,23 @@
+Case: EPRI39 (case39)
+Saved at: 20260613_200555
+
+Test points: 2000
+NR diverged: 1198 (59.9%)
+Rescued: 0 (0.0% of NR-divergent)
+Warm-start convergence: 40.1%
+NN train labels: 897
+NN train MSE: 7.2435e-03
+NN rescued: 0 (0.0% of NR-divergent)
+NN warm convergence: 40.1%
+DCPF solved: 2000/2000 (100.0%)
+DCPF-theta rescued: 0 (0.0% of NR-divergent)
+DCPF-theta warm convergence: 40.1%
+Participation factors computed (converged):
+  PDL warm: 802/2000
+Training time: 497.4s
+NR-failed train points: 3989
+Hard retrain applied: True
+Hard retrain points: 3989
+Hard retrain iters: 20
+Hard retrain time: 24.3s
+Final violation: 1.3241e+01 p.u.

@@ -2418,7 +2418,7 @@ if __name__ == "__main__":
 
     for case_num, case_key, case_label in [
         # (30, 'case30', 'IEEE30'),
-        # (39, 'case39', 'IEEE39'),
+        # (39, 'case39', 'EPRI39'),
         (118, 'case118', 'IEEE118'),
         (300, 'case300', 'IEEE300'),
         (1354, 'case1354pegase', 'PEGASE1354'),
