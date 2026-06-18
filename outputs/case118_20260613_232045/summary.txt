@@ -1,0 +1,20 @@
+Case: IEEE118 (case118)
+Saved at: 20260613_232045
+
+Test points: 1600
+NR diverged: 256 (16.0%)
+Rescued: 256 (100.0% of NR-divergent)
+Warm-start convergence: 100.0%
+NN train labels: 1099
+NN train MSE: 1.5421e-02
+NN rescued: 0 (0.0% of NR-divergent)
+NN warm convergence: 84.0%
+DCPF solved: 1600/1600 (100.0%)
+DCPF-theta rescued: 0 (0.0% of NR-divergent)
+DCPF-theta warm convergence: 84.0%
+Participation factors computed (converged):
+  PDL warm: 1600/1600
+Retrain on failed: True | samples=64 | iters=8
+Retrain time: 1.6s
+Training time: 1372.7s
+Final violation: 1.6877e+00 p.u.

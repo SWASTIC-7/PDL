@@ -1,0 +1,249 @@
+[run_teb] Starting pipeline at Sun Jun 14 02:09:52 PM IST 2026
+[run_teb] Workspace: /home/psquare_llm/TEB1_swastic/PDL
+[run_teb] Log file: /home/psquare_llm/TEB1_swastic/PDL/outputs/logs/teb_run_20260614_140952.log
+
+================================================================================
+  PDL-GAT v6 — Divergence Rescue on Stressed Operating Points
+  Self-supervised transformer warm-start for Newton-Raphson
+================================================================================
+  Output directory: /home/psquare_llm/TEB1_swastic/PDL/outputs
+  Loading data from pandapower: case1354pegase
+  System: 1354 buses, 259 generators, 621 loads
+  Base MVA: 100, Slack: 639, PV: 259, PQ: 1094
+
+  Memory-safe config for case1354pegase: 
+    n_train=2200, n_test=450, batch=96, chunk=64, nn_sup=450, sweep=80x6, model={'d_model': 40, 'n_heads': 4, 'n_layers_primal': 3, 'n_layers_dual': 2}
+
+  Loading PGLIB-OPF API file for case1354pegase...
+  PGLIB cache hit: /home/psquare_llm/TEB1_swastic/PDL/pglib_cache/pglib_opf_case1354_pegase__api.m
+  Parsed MATPOWER file: 1354 buses, 260 gens, 1991 branches
+  baseMVA = 100.0
+There are 6 branches which are considered as trafos - due to ratio unequal 0 or 1 - but connect same voltage levels.
+
+================================================================================
+  DIVERGENCE RESCUE EXPERIMENT: PEGASE1354
+================================================================================
+
+  CONFIG:
+  - Architecture: GAT + Global Attention (same as c5)
+  - Adaptive ρ: init=1, max=500, α=1.2, τ=0.9, warmup=15, freq=3
+  - Pre-training: 8 iters penalty-only at ρ=10
+  - Training data: 2200 mixed (50% normal + 25% synth + 25% API)
+  - Test data: 450 PGLIB API-derived stressed scenarios
+  - NR max iterations: 30
+  - Train batch size: 96, accum steps: 6
+  - Inference chunk size: 64
+  - Stress sweep samples per level: 80
+  - Data source: PGLIB-OPF API tier (Active Power Increase)
+  - Normal NN baseline: supervised MSE on NR labels
+  Device: cuda
+  System: 1354 buses, 259 gens
+
+  Curriculum phases: 3
+    1. easy range=(1.05, 1.3), api_var=0.1 iters=15
+    2. medium range=(1.15, 1.55), api_var=0.15 iters=15
+    3. hard range=(1.25, 1.9), api_var=0.2 iters=15
+  Initialising PDL-GAT v6 model...
+
+  Generating 2200 training samples for phase 'easy'...
+  Pre-training: 8 iters, penalty-only at ρ=10.0
+    pre-train iter  5: max_viol=2.0427e+02 p.u., ρ_pre=10.0
+    pre-train iter  8: max_viol=1.6289e+02 p.u., ρ_pre=10.0
+  Pre-training done in 114.2s
+  PDL training phase 'easy' (threshold: 0.0001 p.u.)...
+--------------------------------------------------------------------------------
+  Iter   1: Max Viol=1.869463e+02 p.u., ρ=1.0
+  Iter   6: Max Viol=7.127460e+01 p.u., ρ=1.0
+  Iter  11: Max Viol=6.662237e+01 p.u., ρ=1.0
+
+  Generating 2200 training samples for phase 'medium'...
+  PDL training phase 'medium' (threshold: 0.0001 p.u.)...
+--------------------------------------------------------------------------------
+  Iter  16: Max Viol=6.400025e+01 p.u., ρ=1.0
+  Iter  21: Max Viol=6.164052e+01 p.u., ρ=1.0
+  Iter  26: Max Viol=5.780297e+01 p.u., ρ=1.2
+
+  Generating 2200 training samples for phase 'hard'...
+  PDL training phase 'hard' (threshold: 0.0001 p.u.)...
+--------------------------------------------------------------------------------
+  Iter  31: Max Viol=5.808987e+01 p.u., ρ=1.4
+  Iter  36: Max Viol=5.599393e+01 p.u., ρ=2.1
+  Iter  41: Max Viol=7.152827e+01 p.u., ρ=2.5
+
+  Training done: 45 iters in 14704.8s (+114.2s pre-train = 14819.0s)
+  Final violation: 6.0562e+01 p.u., final ρ: 3.6
+
+  Building supervised NR labels for normal NN baseline...
+    NN epoch  10/24: mse=1.0686e-01
+    NN epoch  20/24: mse=9.3951e-02
+    NN epoch  24/24: mse=7.8213e-02
+  Normal NN baseline trained on 329 samples in 0.1s
+
+================================================================================
+  STRESSED TEST SET: 450 PGLIB API-derived scenarios
+================================================================================
+
+  API test avg total P: 827.0614 p.u. (~1.12x base load)
+  Running NR flat-start on 450 stressed points...
+  NR flat-start: 401/450 converged, 49 DIVERGED (10.9%)
+  NR flat-start total time: 38.5s
+
+  Running PDL inference...
+  PDL inference: 1008.7 ms (2.2416 ms/sample)
+  PDL max violations: P=2.5686e+01, Q=7.7629e+00
+
+  Selecting failed high-divergence points for retrain...
+  Retraining on 13 hard points (top 25% divergence of failed set)
+    Retrain iter  1/6: max_viol=2.4709e+01
+    Retrain iter  4/6: max_viol=1.7681e+01
+    Retrain iter  6/6: max_viol=2.9128e+01
+  Retrain time: 12.8s (total training time 14831.8s)
+  Re-running PDL inference after retrain...
+
+  Running PDL warm-start + NR on 450 stressed points...
+  PDL warm-start + NR: 320/450 converged, 130 diverged
+  PDL warm-start + NR total time: 49.6s
+
+  Running normal NN inference...
+  Normal NN inference: 15.7 ms (0.0348 ms/sample)
+
+  Running normal NN warm-start + NR on 450 points...
+  Normal NN warm-start + NR: 0/450 converged, 450 diverged
+  Normal NN warm-start + NR total time: 83.4s
+
+  Running DCPF on each stressed point for theta warm-start...
+  DCPF solved: 450/450 (100.0%)
+  DCPF total time: 22.7s
+
+  Running DCPF-theta warm-start + NR on 450 stressed points...
+  DCPF-theta warm-start + NR: 401/450 converged, 49 diverged
+  DCPF-theta warm-start + NR total time: 39.8s
+
+================================================================================
+  DIVERGENCE RESCUE RESULTS — PEGASE1354
+================================================================================
+
+  Total stressed test points:        450
+  NR flat-start converged:           401 (89.1%)
+  NR flat-start DIVERGED:            49 (10.9%)
+  PDL warm-start + NR converged:     320 (71.1%)
+  NN warm-start + NR converged:      0 (0.0%)
+  DCPF-theta warm-start + NR conv:  401 (89.1%)
+
+  Both converged:                    320
+  *** RESCUED by PDL warm-start:     0 ***
+  *** RESCUED by NN warm-start:      0 ***
+  *** RESCUED by DCPF-theta warm:    0 ***
+  Both diverged:                     49
+  Flat OK but warm diverged:         81
+  Flat OK but NN warm diverged:      401
+  Flat OK but DCPF warm diverged:    0
+
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  PDL WARM-START RESCUES   0.0% OF NR-DIVERGENT CASES     ║
+  ║  (0 out of 49 divergent points)                              ║
+  ╚═══════════════════════════════════════════════════════════╝
+  NN warm-start rescue rate:         0.0%
+  DCPF-theta rescue rate:            0.0%
+
+  Iteration reduction (both-converged subset):
+    NR flat avg iters:  5.00
+    PDL warm avg iters: 5.81
+    Reduction:          -16.1%
+
+  Accuracy vs NR (both-converged subset, 320 pts):
+    Voltage MSE:  1.1329e-03 p.u.²
+    Angle MSE:    1.5408e+04 deg²
+
+================================================================================
+  CONVERGENCE VS STRESS LEVEL SWEEP
+================================================================================
+
+  API load × 0.8 ...
+    NR flat: 100.0%   PDL warm: 100.0%   Rescue margin: +0.0pp
+  API load × 0.8 ...
+    NR flat: 100.0%   PDL warm: 100.0%   Rescue margin: +0.0pp
+  API load × 0.9 ...
+    NR flat: 100.0%   PDL warm: 100.0%   Rescue margin: +0.0pp
+  API load × 1.0 ...
+    NR flat: 100.0%   PDL warm: 100.0%   Rescue margin: +0.0pp
+  API load × 1.1 ...
+    NR flat: 100.0%   PDL warm: 0.0%   Rescue margin: +-100.0pp
+  API load × 1.1 ...
+    NR flat: 100.0%   PDL warm: 0.0%   Rescue margin: +-100.0pp
+
+================================================================================
+  TRACTABILITY SNAPSHOT (BASE + VARIATION)
+================================================================================
+
+  Base case: NR flat=True | PDL warm=True | DCPF warm=True
+  Variation 0.10: NR flat=93.3% | PDL warm=75.6% | margin=+-17.8pp
+  Variation 0.15: NR flat=93.3% | PDL warm=75.6% | margin=+-17.8pp
+  Variation 0.20: NR flat=86.7% | PDL warm=68.9% | margin=+-17.8pp
+  Saved outputs: /home/psquare_llm/TEB1_swastic/PDL/outputs/case1354pegase_20260614_182218
+
+  PEGASE1354: COMPLETED
+
+
+
+==========================================================================================
+  CROSS-CASE COMPARISON: DIVERGENCE RESCUE SUMMARY
+==========================================================================================
+
+  Case         Test Pts   NR Div  NR Div%  PDL Res    PDL %   NN Res     NN %   DC Res     DC %  PDL Conv%  NN Conv%  DC Conv%  Train (s)
+  ------------------------------------------------------------------------------------------------------------------------
+  PEGASE1354        450       49    10.9%        0     0.0%        0     0.0%        0     0.0%      71.1%      0.0%     89.1%    14831.8
+
+  NARRATIVE:
+  • PEGASE1354: NR diverges on 10.9% of stressed points. PDL warm-start rescues 0.0% of those, NN warm-start rescues 0.0%, while DCPF-theta warm-start rescues 0.0%.
+
+
+================================================================================
+  ALL DONE
+================================================================================
+
+══════════════════════════════════════════════════════════════════════
+  Beautiful Plots for PDL-GAT v6 Divergence Rescue Results
+══════════════════════════════════════════════════════════════════════
+
+  NOTE: Run this AFTER c6.py in the same Python session.
+  Usage:
+    exec(open('c6_beautiful_plots.py').read())
+  or import and call:
+    from c6_beautiful_plots import generate_all_beautiful_plots
+    figs = generate_all_beautiful_plots(all_summaries)
+    plt.show()
+
+  'all_summaries' not found in scope. Loading from outputs/ ...
+
+  Loaded 4 summaries from outputs
+
+  Generating beautiful plots for EPRI 39 ...
+/home/psquare_llm/TEB1_swastic/PDL/charts.py:733: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquare_llm/TEB1_swastic/PDL/charts.py:1443: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+  Generating beautiful plots for IEEE 118 ...
+/home/psquare_llm/TEB1_swastic/PDL/charts.py:733: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquare_llm/TEB1_swastic/PDL/charts.py:1443: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+  Generating beautiful plots for IEEE 300 ...
+/home/psquare_llm/TEB1_swastic/PDL/charts.py:733: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquare_llm/TEB1_swastic/PDL/charts.py:1443: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+  Generating beautiful plots for PEGASE 1354 ...
+/home/psquare_llm/TEB1_swastic/PDL/charts.py:733: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout()
+/home/psquare_llm/TEB1_swastic/PDL/charts.py:1443: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.95])
+  Generating cross-case comparison ...
+
+  Saved 49 chart files under outputs/
+  Generated 0 in-memory figures.
+[run_teb] Completed at Sun Jun 14 06:22:28 PM IST 2026
+[run_teb] Outputs saved under: /home/psquare_llm/TEB1_swastic/PDL/outputs

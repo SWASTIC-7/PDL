@@ -1,0 +1,20 @@
+Case: IEEE300 (case300)
+Saved at: 20260616_165126
+
+Test points: 800
+NR diverged: 729 (91.1%)
+Rescued: 487 (66.8% of NR-divergent)
+Warm-start convergence: 61.5%
+NN train labels: 120
+NN train MSE: 1.4238e-01
+NN rescued: 0 (0.0% of NR-divergent)
+NN warm convergence: 5.9%
+DCPF solved: 800/800 (100.0%)
+DCPF-theta rescued: 0 (0.0% of NR-divergent)
+DCPF-theta warm convergence: 8.9%
+Participation factors computed (converged):
+  PDL warm: 492/800
+Retrain on failed: True | samples=183 | iters=8
+Retrain time: 13.1s
+Training time: 8047.0s
+Final violation: 5.9285e+00 p.u.

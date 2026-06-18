@@ -1,0 +1,20 @@
+Case: PEGASE1354 (case1354pegase)
+Saved at: 20260614_182218
+
+Test points: 450
+NR diverged: 49 (10.9%)
+Rescued: 0 (0.0% of NR-divergent)
+Warm-start convergence: 71.1%
+NN train labels: 329
+NN train MSE: 7.4349e-02
+NN rescued: 0 (0.0% of NR-divergent)
+NN warm convergence: 0.0%
+DCPF solved: 450/450 (100.0%)
+DCPF-theta rescued: 0 (0.0% of NR-divergent)
+DCPF-theta warm convergence: 89.1%
+Participation factors computed (converged):
+  PDL warm: 320/450
+Retrain on failed: True | samples=13 | iters=6
+Retrain time: 12.8s
+Training time: 14831.8s
+Final violation: 2.9128e+01 p.u.

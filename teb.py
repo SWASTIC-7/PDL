@@ -28,6 +28,7 @@ import json
 import copy
 import os
 import re
+import random
 import urllib.request
 import tempfile
 from collections import defaultdict
@@ -78,6 +79,22 @@ def _get_nr_iterations(net):
         return int(net._ppc['iterations'])
     except (KeyError, TypeError, AttributeError):
         return None
+
+
+def set_global_seed(seed):
+    """Seed Python, NumPy and PyTorch RNGs for reproducible runs.
+
+    Without this, training data, model init and test points are redrawn every
+    run, which causes large run-to-run swings on knife-edge cases (e.g. 300,
+    1354) where the model sits right at the boundary of usefulness.
+    """
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    print(f"  Global RNG seed set to {seed}")
 
 
 def _compute_participation_factors(pg_pu, pmax_pu):
@@ -415,12 +432,18 @@ def generate_mixed_training_with_api(system_data, ppc_api, n_samples,
     return P[idx], Q[idx]
 
 
-def build_curriculum_phases():
-    """Return default curriculum phases from easier to harder."""
+def build_training_phases():
+    """Single hard-distribution training phase (curriculum removed).
+
+    Curriculum learning split the iteration budget across easy/medium/hard
+    distributions, leaving only ~1/3 of the iterations on the hard
+    distribution that matches the stressed test set — which measurably
+    worsened the larger cases. We train directly on the hard distribution
+    for the full budget, as the original ("outputs are outstanding") version
+    did.
+    """
     return [
-        dict(label='easy', stressed_range=(1.05, 1.30), api_variation=0.10),
-        dict(label='medium', stressed_range=(1.15, 1.55), api_variation=0.15),
-        dict(label='hard', stressed_range=(1.25, 1.90), api_variation=0.20),
+        dict(label='hard', stressed_range=(1.2, 1.8), api_variation=0.20),
     ]
 
 
@@ -1142,6 +1165,30 @@ class PDL_ACPF_GAT:
     def _dual_forward(self, Pm, Qm):
         return self.dual_net(Pm, Qm, self.adj, self.edge_weights)
 
+    def _eval_violation(self, P_batch, Q_batch, n_eval, batch_size):
+        """Chunked violation eval to avoid OOM on large systems.
+
+        The attention matrix is (B, H, N, N); a full forward over ~1000
+        samples blows up for large N (e.g. PEGASE1354). Chunk by batch_size.
+        """
+        max_Pv = max_Qv = 0.0
+        sum_abs = 0.0
+        count = 0
+        bs = max(1, batch_size)
+        with torch.no_grad():
+            for i in range(0, n_eval, bs):
+                e = min(i + bs, n_eval)
+                Pm, Qm = P_batch[i:e], Q_batch[i:e]
+                Pg, Qg, V, th = self._primal_forward(Pm, Qm)
+                Pv, Qv = self.compute_power_balance(Pg, Qg, V, th, Pm, Qm)
+                max_Pv = max(max_Pv, torch.max(torch.abs(Pv)).item())
+                max_Qv = max(max_Qv, torch.max(torch.abs(Qv)).item())
+                sum_abs += (torch.sum(torch.abs(Pv))
+                            + torch.sum(torch.abs(Qv))).item()
+                count += Pv.numel() + Qv.numel()
+        mean_viol = sum_abs / max(count, 1)
+        return max_Pv, max_Qv, mean_viol
+
     def pretrain(self, P_batch, Q_batch, n_iters=15, rho_pre=10.0,
                  batch_size=1024):
         print(f"  Pre-training: {n_iters} iters, penalty-only at ρ={rho_pre}")
@@ -1162,14 +1209,10 @@ class PDL_ACPF_GAT:
                     self.primal_net.parameters(), 1.0)
                 self.primal_optimizer.step()
             if (k + 1) % 5 == 0 or k == n_iters - 1:
-                with torch.no_grad():
-                    es = min(1000, P_batch.shape[0])
-                    Pg, Qg, V, th = self._primal_forward(
-                        P_batch[:es], Q_batch[:es])
-                    Pv, Qv = self.compute_power_balance(
-                        Pg, Qg, V, th, P_batch[:es], Q_batch[:es])
-                    mv = max(torch.max(torch.abs(Pv)).item(),
-                             torch.max(torch.abs(Qv)).item())
+                es = min(1000, P_batch.shape[0])
+                max_Pv, max_Qv, _ = self._eval_violation(
+                    P_batch, Q_batch, es, batch_size)
+                mv = max(max_Pv, max_Qv)
                 print(f"    pre-train iter {k + 1:2d}: "
                       f"max_viol={mv:.4e} p.u., ρ_pre={rho_pre}")
 
@@ -1249,16 +1292,10 @@ class PDL_ACPF_GAT:
         self.dual_scheduler.step()
         del all_mults_old
 
-        with torch.no_grad():
-            es = min(1000, n)
-            Pg, Qg, V, th = self._primal_forward(P_batch[:es], Q_batch[:es])
-            Pv, Qv = self.compute_power_balance(
-                Pg, Qg, V, th, P_batch[:es], Q_batch[:es])
-            max_Pv   = torch.max(torch.abs(Pv)).item()
-            max_Qv   = torch.max(torch.abs(Qv)).item()
-            max_viol  = max(max_Pv, max_Qv)
-            mean_viol = (torch.mean(torch.abs(Pv))
-                         + torch.mean(torch.abs(Qv))).item() / 2.0
+        es = min(1000, n)
+        max_Pv, max_Qv, mean_viol = self._eval_violation(
+            P_batch, Q_batch, es, batch_size)
+        max_viol = max(max_Pv, max_Qv)
 
         self._update_rho(max_viol)
 
@@ -1286,10 +1323,11 @@ class PDL_ACPF_GAT:
 
 
 def get_memory_safe_case_config(case_key, n_buses):
-    """Return memory-aware run config for each case size (Kaggle-friendly)."""
+    """Return run config per case size (scaled for a large ≥48 GB GPU)."""
     use_cuda = torch.cuda.is_available()
 
     cfg = dict(
+        seed=42,
         n_train=10000,
         n_stressed_test=2000,
         max_outer_iters=100,
@@ -1307,7 +1345,7 @@ def get_memory_safe_case_config(case_key, n_buses):
         nn_batch_size=256 if use_cuda else 128,
         model_kwargs=dict(d_model=64, n_heads=4,
                           n_layers_primal=4, n_layers_dual=2),
-        curriculum_phases=build_curriculum_phases(),
+        curriculum_phases=build_training_phases(),
         curriculum_outer_iters=None,
         retrain_on_failed=True,
         retrain_top_frac=0.25,
@@ -1316,43 +1354,51 @@ def get_memory_safe_case_config(case_key, n_buses):
     )
 
     if n_buses >= 1000 or case_key == 'case1354pegase':
+        # Scaled up for a large (≥48 GB) GPU. The previous values were
+        # throttled for a 12 GB / Kaggle card and left this case badly
+        # under-trained (final violation ~29 p.u., PDL warm worse than flat
+        # NR). Bigger model + more iterations + more samples. NOTE: this is
+        # the most expensive case — expect a long wall-clock training time;
+        # dial max_outer_iters / n_train down if it is too slow.
         cfg.update(dict(
-            n_train=2200,
+            n_train=3500,
             n_stressed_test=450,
-            max_outer_iters=45,
-            pretrain_iters=8,
-            train_inner_iters=70,
-            train_batch_size=96 if use_cuda else 24,
-            train_accum_steps=6,
-            sweep_samples=80 if use_cuda else 30,
-            stress_multipliers=[0.75, 0.85, 0.95, 1.00, 1.05, 1.10],
-            inference_chunk_size=64 if use_cuda else 24,
-            nn_supervised_samples=450,
-            nn_epochs=24,
-            nn_batch_size=64 if use_cuda else 24,
-            model_kwargs=dict(d_model=40, n_heads=4,
-                              n_layers_primal=3, n_layers_dual=2),
-            retrain_iters=6,
-            retrain_inner_iters=60,
-        ))
-    elif n_buses >= 250 or case_key == 'case300':
-        cfg.update(dict(
-            n_train=4000,
-            n_stressed_test=800,
             max_outer_iters=60,
             pretrain_iters=10,
             train_inner_iters=90,
-            train_batch_size=192 if use_cuda else 64,
+            train_batch_size=96 if use_cuda else 24,
             train_accum_steps=6,
-            sweep_samples=200,
-            inference_chunk_size=128 if use_cuda else 64,
-            nn_supervised_samples=800,
+            sweep_samples=120 if use_cuda else 30,
+            stress_multipliers=[0.75, 0.85, 0.95, 1.00, 1.05, 1.10],
+            inference_chunk_size=96 if use_cuda else 24,
+            nn_supervised_samples=900,
             nn_epochs=30,
-            nn_batch_size=96 if use_cuda else 48,
-            model_kwargs=dict(d_model=48, n_heads=4,
-                              n_layers_primal=3, n_layers_dual=2),
-            retrain_iters=7,
-            retrain_inner_iters=70,
+            nn_batch_size=96 if use_cuda else 24,
+            model_kwargs=dict(d_model=64, n_heads=4,
+                              n_layers_primal=4, n_layers_dual=2),
+            retrain_iters=8,
+            retrain_inner_iters=80,
+        ))
+    elif n_buses >= 250 or case_key == 'case300':
+        # Scaled up for a large GPU (was throttled to d_model=48 / 3 layers /
+        # 60 iters for a 12 GB card). Restores full-size model and budget.
+        cfg.update(dict(
+            n_train=7000,
+            n_stressed_test=800,
+            max_outer_iters=90,
+            pretrain_iters=12,
+            train_inner_iters=120,
+            train_batch_size=384 if use_cuda else 64,
+            train_accum_steps=8,
+            sweep_samples=300,
+            inference_chunk_size=256 if use_cuda else 64,
+            nn_supervised_samples=1200,
+            nn_epochs=36,
+            nn_batch_size=192 if use_cuda else 48,
+            model_kwargs=dict(d_model=64, n_heads=4,
+                              n_layers_primal=4, n_layers_dual=2),
+            retrain_iters=8,
+            retrain_inner_iters=80,
         ))
     elif n_buses >= 100:
         cfg.update(dict(
@@ -1463,8 +1509,12 @@ def run_divergence_rescue_experiment(
     retrain_on_failed=True,
     retrain_top_frac=0.25,
     retrain_iters=8,
-    retrain_inner_iters=80):
+    retrain_inner_iters=80,
+    seed=42):
     """Full pipeline: train PDL-GAT → test on PGLIB API stressed points → rescue."""
+
+    if seed is not None:
+        set_global_seed(seed)
 
     print(f"\n{'=' * 80}")
     print(f"  DIVERGENCE RESCUE EXPERIMENT: {case_name}")
@@ -1490,7 +1540,7 @@ def run_divergence_rescue_experiment(
     # ------------------------------------------------------------------
     # 1. Curriculum training data (easy -> hard)
     # ------------------------------------------------------------------
-    phases = curriculum_phases if curriculum_phases is not None else build_curriculum_phases()
+    phases = curriculum_phases if curriculum_phases is not None else build_training_phases()
     if not phases:
         phases = [dict(label='single', stressed_range=(1.2, 1.8), api_variation=0.20)]
 
@@ -2419,7 +2469,7 @@ if __name__ == "__main__":
     for case_num, case_key, case_label in [
         # (30, 'case30', 'IEEE30'),
         # (39, 'case39', 'EPRI39'),
-        (118, 'case118', 'IEEE118'),
+        # (118, 'case118', 'IEEE118'),
         (300, 'case300', 'IEEE300'),
         (1354, 'case1354pegase', 'PEGASE1354'),
     ]:
@@ -2468,6 +2518,7 @@ if __name__ == "__main__":
                 retrain_top_frac=case_cfg.get('retrain_top_frac', 0.25),
                 retrain_iters=case_cfg.get('retrain_iters', 8),
                 retrain_inner_iters=case_cfg.get('retrain_inner_iters', 80),
+                seed=case_cfg.get('seed', 42),
             )
             all_summaries.append(summary)
             case_out_dir = save_case_outputs(
