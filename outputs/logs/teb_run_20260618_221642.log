@@ -1,0 +1,54 @@
+[run_teb] Starting pipeline at Thu Jun 18 10:16:42 PM IST 2026
+[run_teb] Workspace: /home/psquare_llm/TEB1_swastic/PDL
+[run_teb] Log file: /home/psquare_llm/TEB1_swastic/PDL/outputs/logs/teb_run_20260618_221642.log
+
+================================================================================
+  PDL-GAT v6 — Divergence Rescue on Stressed Operating Points
+  Self-supervised transformer warm-start for Newton-Raphson
+================================================================================
+  Output directory: /home/psquare_llm/TEB1_swastic/PDL/outputs
+  Loading data from pandapower: case1354pegase
+  System: 1354 buses, 259 generators, 621 loads
+  Base MVA: 100, Slack: 639, PV: 259, PQ: 1094
+
+  Memory-safe config for case1354pegase: 
+    n_train=3500, n_test=450, batch=96, chunk=96, nn_sup=900, sweep=120x6, model={'d_model': 64, 'n_heads': 4, 'n_layers_primal': 4, 'n_layers_dual': 2}
+
+  Loading PGLIB-OPF API file for case1354pegase...
+  PGLIB cache hit: /home/psquare_llm/TEB1_swastic/PDL/pglib_cache/pglib_opf_case1354_pegase__api.m
+  Parsed MATPOWER file: 1354 buses, 260 gens, 1991 branches
+  baseMVA = 100.0
+There are 6 branches which are considered as trafos - due to ratio unequal 0 or 1 - but connect same voltage levels.
+  Global RNG seed set to 42
+
+================================================================================
+  DIVERGENCE RESCUE EXPERIMENT: PEGASE1354
+================================================================================
+
+  CONFIG:
+  - Architecture: GAT + Global Attention (same as c5)
+  - Adaptive ρ: init=1, max=500, α=1.2, τ=0.9, warmup=15, freq=3
+  - Pre-training: 10 iters penalty-only at ρ=10
+  - Training data: 3500 mixed (50% normal + 25% synth + 25% API)
+  - Test data: 450 PGLIB API-derived stressed scenarios
+  - NR max iterations: 30
+  - Train batch size: 96, accum steps: 6
+  - Inference chunk size: 96
+  - Stress sweep samples per level: 120
+  - Data source: PGLIB-OPF API tier (Active Power Increase)
+  - Normal NN baseline: supervised MSE on NR labels
+  Device: cuda
+  System: 1354 buses, 259 gens
+
+  Curriculum phases: 1
+    1. hard range=(1.2, 1.8), api_var=0.2 iters=60
+  Initialising PDL-GAT v6 model...
+
+  Generating 3500 training samples for phase 'hard'...
+  Pre-training: 10 iters, penalty-only at ρ=10.0
+    pre-train iter  5: max_viol=1.3978e+02 p.u., ρ_pre=10.0
+    pre-train iter 10: max_viol=1.2198e+02 p.u., ρ_pre=10.0
+  Pre-training done in 275.9s
+  PDL training phase 'hard' (threshold: 0.0001 p.u.)...
+--------------------------------------------------------------------------------
+  Iter   1: Max Viol=1.004641e+02 p.u., ρ=1.0

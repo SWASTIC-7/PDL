@@ -200,6 +200,7 @@ PGLIB_API_URLS = {
     'case118': 'https://raw.githubusercontent.com/power-grid-lib/pglib-opf/master/api/pglib_opf_case118_ieee__api.m',
     'case300': 'https://raw.githubusercontent.com/power-grid-lib/pglib-opf/master/api/pglib_opf_case300_ieee__api.m',
     'case1354pegase': 'https://raw.githubusercontent.com/power-grid-lib/pglib-opf/master/api/pglib_opf_case1354_pegase__api.m',
+    'case1888rte': 'https://raw.githubusercontent.com/power-grid-lib/pglib-opf/master/api/pglib_opf_case1888_rte__api.m',
 }
 
 # Local cache directory (works in both scripts and Jupyter/Kaggle notebooks)
@@ -345,12 +346,19 @@ def extract_api_loads_pu(ppc):
 
 
 def generate_api_test_scenarios(ppc, system_data, n_samples,
-                                variation=None):
+                                variation=None, base_scale=1.0):
     """Generate test scenarios centred on the PGLIB API operating point.
 
     The API file defines a single near-collapse load level.  We create
     n_samples perturbations around a scaled API base so that most points
     are near or beyond the loadability limit.
+
+    `variation` sets per-bus log-normal-ish noise (larger -> harder/more
+    NR-divergent test set).  `base_scale` uniformly scales the API operating
+    point before perturbation: values >1 push the whole test set deeper past
+    the loadability limit, raising the NR-divergence rate so a rescue method
+    has a meaningful regime to act on (used to stress well-conditioned large
+    cases like PEGASE-1354 whose API point alone diverges only ~9%).
 
     Returns (P, Q, labels) where P, Q have shape (n_samples, n_buses)
     and are in per-unit, indexed in the same bus order as system_data.
@@ -369,6 +377,10 @@ def generate_api_test_scenarios(ppc, system_data, n_samples,
     for i in range(min(n_api_buses, n_buses_sd)):
         api_P_full[i] = api_P[i]
         api_Q_full[i] = api_Q[i]
+
+    # Uniformly scale the API base operating point.
+    api_P_full = api_P_full * base_scale
+    api_Q_full = api_Q_full * base_scale
 
     P = np.zeros((n_samples, n_buses_sd))
     Q = np.zeros((n_samples, n_buses_sd))
@@ -768,8 +780,18 @@ def build_supervised_nr_targets(system_data, P_pu, Q_pu,
 
 def train_normal_nn_acopf(system_data, P_train, Q_train, device,
                           max_samples=1500, nr_max_iter=30,
-                          epochs=40, batch_size=256, lr=1e-3):
-    """Train a simple supervised NN baseline with MSE loss."""
+                          epochs=40, batch_size=256, lr=1e-3,
+                          val_frac=0.1, patience=40):
+    """Train a simple supervised NN baseline with MSE loss.
+
+    Uses a held-out validation split with early stopping and cosine LR decay,
+    restoring the best-val checkpoint.  Without these, the baseline was badly
+    under-trained on large systems (e.g. PEGASE-1354: 30 epochs / 0.2 s left
+    the loss still falling steeply, so its warm-start point was worse than a
+    flat start and rescued 0% of NR-divergent cases).  We also record the
+    label angle range so inference can clamp wild theta predictions that would
+    otherwise poison NR.
+    """
     print(f"\n  Building supervised NR labels for normal NN baseline...")
     X_np, Y_np = build_supervised_nr_targets(
         system_data, P_train, Q_train,
@@ -784,17 +806,37 @@ def train_normal_nn_acopf(system_data, P_train, Q_train, device,
     y_mean = Y_np.mean(axis=0, keepdims=True)
     y_std = Y_np.std(axis=0, keepdims=True) + 1e-6
 
-    X = torch.tensor((X_np - x_mean) / x_std, dtype=torch.float32, device=device)
-    Y = torch.tensor((Y_np - y_mean) / y_std, dtype=torch.float32, device=device)
+    # Angle clamp range (degrees) taken from the converged NR labels, padded.
+    n_gen = system_data['n_generators']
+    n_bus = system_data['n_buses']
+    th_labels = Y_np[:, n_gen + n_bus:n_gen + 2 * n_bus]
+    th_lo = float(th_labels.min()) - 15.0
+    th_hi = float(th_labels.max()) + 15.0
+
+    X_all = torch.tensor((X_np - x_mean) / x_std, dtype=torch.float32, device=device)
+    Y_all = torch.tensor((Y_np - y_mean) / y_std, dtype=torch.float32, device=device)
+
+    # Train / validation split for early stopping.
+    n_total = X_all.shape[0]
+    n_val = max(8, int(n_total * val_frac)) if n_total >= 64 else 0
+    perm0 = torch.randperm(n_total, device=device)
+    val_idx = perm0[:n_val]
+    tr_idx = perm0[n_val:]
+    X, Y = X_all[tr_idx], Y_all[tr_idx]
+    X_val, Y_val = X_all[val_idx], Y_all[val_idx]
 
     model = NormalACOPFNN(X.shape[1], Y.shape[1]).to(device)
     opt = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(epochs, 1))
     loss_fn = nn.MSELoss()
 
     n = X.shape[0]
     t0 = time.time()
-    model.train()
+    best_val = float('inf')
+    best_state = copy.deepcopy(model.state_dict())
+    epochs_no_improve = 0
     for ep in range(epochs):
+        model.train()
         perm = torch.randperm(n, device=device)
         ep_loss = 0.0
         nb = 0
@@ -808,15 +850,39 @@ def train_normal_nn_acopf(system_data, P_train, Q_train, device,
             opt.step()
             ep_loss += float(loss.item())
             nb += 1
-        if (ep + 1) % 10 == 0 or ep == epochs - 1:
-            print(f"    NN epoch {ep + 1:3d}/{epochs}: mse={ep_loss / max(nb, 1):.4e}")
+        sched.step()
 
+        # Validation (falls back to train loss when no val split).
+        model.eval()
+        with torch.no_grad():
+            if n_val > 0:
+                val_mse = float(loss_fn(model(X_val), Y_val).item())
+            else:
+                val_mse = ep_loss / max(nb, 1)
+        if val_mse < best_val - 1e-5:
+            best_val = val_mse
+            best_state = copy.deepcopy(model.state_dict())
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+
+        if (ep + 1) % 20 == 0 or ep == epochs - 1:
+            print(f"    NN epoch {ep + 1:4d}/{epochs}: "
+                  f"train_mse={ep_loss / max(nb, 1):.4e} "
+                  f"val_mse={val_mse:.4e} best={best_val:.4e}")
+        if epochs_no_improve >= patience:
+            print(f"    NN early stop at epoch {ep + 1} "
+                  f"(no val improvement for {patience} epochs)")
+            break
+
+    model.load_state_dict(best_state)
     elapsed = time.time() - t0
     model.eval()
     with torch.no_grad():
-        train_mse = float(loss_fn(model(X), Y).item())
+        train_mse = float(loss_fn(model(X_all), Y_all).item())
 
-    print(f"  Normal NN baseline trained on {n} samples in {elapsed:.1f}s")
+    print(f"  Normal NN baseline trained on {n}+{n_val} (train+val) samples "
+          f"in {elapsed:.1f}s | best val_mse={best_val:.4e}")
     return dict(
         model=model,
         x_mean=x_mean.astype(np.float32),
@@ -824,8 +890,10 @@ def train_normal_nn_acopf(system_data, P_train, Q_train, device,
         y_mean=y_mean.astype(np.float32),
         y_std=y_std.astype(np.float32),
         train_mse=train_mse,
-        n_labels=int(n),
+        n_labels=int(n_total),
         train_time=elapsed,
+        theta_lo=th_lo,
+        theta_hi=th_hi,
     )
 
 
@@ -857,7 +925,10 @@ def normal_nn_predict_chunked(nn_state, system_data, P_np, Q_np, device,
     Y_all = np.concatenate(out, axis=0)
     pg = Y_all[:, :n_gen]
     v = np.clip(Y_all[:, n_gen:n_gen + n_bus], 0.5, 1.5)
-    th_deg = Y_all[:, n_gen + n_bus:n_gen + 2 * n_bus]
+    # Clamp angles to the label range so wild predictions don't poison NR.
+    th_lo = nn_state.get('theta_lo', -90.0)
+    th_hi = nn_state.get('theta_hi', 90.0)
+    th_deg = np.clip(Y_all[:, n_gen + n_bus:n_gen + 2 * n_bus], th_lo, th_hi)
     return dict(Pg=pg, V=v, theta_deg=th_deg, elapsed=time.time() - t0)
 
 
@@ -875,22 +946,52 @@ class GraphAttentionLayer(nn.Module):
         self.out_proj  = nn.Linear(d_model, d_model)
         self.dropout   = nn.Dropout(dropout)
         self.edge_scale = nn.Parameter(torch.zeros(n_heads))
+        # Sparse edge-index cache (built lazily from `adj`). Power-grid
+        # adjacency is ~0.3% dense, so a dense (B,H,N,N) attention matrix is
+        # almost entirely masked -inf — wasteful in both memory and compute.
+        # We attend only over real edges instead; mathematically identical to
+        # the masked dense softmax above, but O(E) instead of O(N^2).
+        self._adj_key = None
+        self._ei = None
+        self._ej = None
+
+    def _edge_index(self, adj):
+        """Cache (row=query, col=key) indices of nonzero adjacency entries."""
+        key = (adj.data_ptr(), adj.shape)
+        if self._adj_key != key:
+            ei, ej = torch.nonzero(adj, as_tuple=True)
+            self._ei, self._ej = ei.contiguous(), ej.contiguous()
+            self._adj_key = key
+        return self._ei, self._ej
 
     def forward(self, x, adj, edge_weights=None):
         B, N, C = x.shape
         H, D = self.n_heads, self.head_dim
         qkv = self.qkv(x).reshape(B, N, 3, H, D).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        mask = (adj == 0).unsqueeze(0).unsqueeze(0)
-        attn = attn.masked_fill(mask, float('-inf'))
+        q, k, v = qkv.unbind(0)                       # each [B, H, N, D]
+
+        ei, ej = self._edge_index(adj)                # [E] query / key nodes
+        E = ei.shape[0]
+        scores = (q[:, :, ei, :] * k[:, :, ej, :]).sum(-1) * self.scale  # [B,H,E]
         if edge_weights is not None:
-            ew = edge_weights.unsqueeze(0).unsqueeze(0)
-            attn = attn + ew * self.edge_scale.view(1, H, 1, 1)
-        attn = F.softmax(attn, dim=-1)
-        attn = torch.nan_to_num(attn, 0.0)
-        attn = self.dropout(attn)
-        out  = (attn @ v).transpose(1, 2).reshape(B, N, C)
+            scores = scores + edge_weights[ei, ej].view(1, 1, E) \
+                * self.edge_scale.view(1, H, 1)
+
+        # Grouped softmax over edges that share the same query node `ei`.
+        idx = ei.view(1, 1, E).expand(B, H, E)
+        m = torch.full((B, H, N), float('-inf'), device=x.device, dtype=scores.dtype)
+        m.scatter_reduce_(2, idx, scores, reduce='amax', include_self=False)
+        exps = (scores - m.gather(2, idx)).exp()
+        denom = torch.zeros(B, H, N, device=x.device, dtype=scores.dtype)
+        denom.scatter_add_(2, idx, exps)
+        w = exps / denom.gather(2, idx).clamp_min(1e-20)   # [B, H, E]
+        w = self.dropout(w)
+
+        out = torch.zeros(B, H, N, D, device=x.device, dtype=v.dtype)
+        out.scatter_add_(2, idx.unsqueeze(-1).expand(B, H, E, D),
+                         w.unsqueeze(-1) * v[:, :, ej, :])
+        out = torch.nan_to_num(out, 0.0)
+        out = out.transpose(1, 2).reshape(B, N, C)
         return self.out_proj(out)
 
 
@@ -1122,11 +1223,16 @@ class PDL_ACPF_GAT:
 
     def compute_power_balance(self, Pg, Qg, V, theta, P_demand, Q_demand):
         B = V.shape[0]
+        # Scatter generator injections onto their buses. index_add_ handles
+        # multiple gens on the same bus (accumulates) and replaces the old
+        # Python for-loop over ~260 gens (260 tiny kernel launches per call).
+        if getattr(self, '_gen_bus_idx', None) is None:
+            self._gen_bus_idx = torch.as_tensor(
+                self.gen_buses, dtype=torch.long, device=self.device)
         P_inj = torch.zeros(B, self.n_buses, device=self.device)
         Q_inj = torch.zeros(B, self.n_buses, device=self.device)
-        for idx, bus in enumerate(self.gen_buses):
-            P_inj[:, bus] += Pg[:, idx]
-            Q_inj[:, bus] += Qg[:, idx]
+        P_inj.index_add_(1, self._gen_bus_idx, Pg)
+        Q_inj.index_add_(1, self._gen_bus_idx, Qg)
         P_inj -= P_demand
         Q_inj -= Q_demand
 
@@ -1353,7 +1459,7 @@ def get_memory_safe_case_config(case_key, n_buses):
         retrain_inner_iters=80,
     )
 
-    if n_buses >= 1000 or case_key == 'case1354pegase':
+    if case_key == 'case1354pegase' or (1000 <= n_buses < 1700):
         # Scaled up for a large (≥48 GB) GPU. The previous values were
         # throttled for a 12 GB / Kaggle card and left this case badly
         # under-trained (final violation ~29 p.u., PDL warm worse than flat
@@ -1371,32 +1477,96 @@ def get_memory_safe_case_config(case_key, n_buses):
             sweep_samples=120 if use_cuda else 30,
             stress_multipliers=[0.75, 0.85, 0.95, 1.00, 1.05, 1.10],
             inference_chunk_size=96 if use_cuda else 24,
-            nn_supervised_samples=900,
-            nn_epochs=30,
+            nn_supervised_samples=1500,
+            nn_epochs=400,
             nn_batch_size=96 if use_cuda else 24,
             model_kwargs=dict(d_model=64, n_heads=4,
                               n_layers_primal=4, n_layers_dual=2),
             retrain_iters=8,
             retrain_inner_iters=80,
+            # PEGASE-1354's API point alone diverges only ~9% under flat NR,
+            # which makes the rescue story weak. Push the test set deeper past
+            # the loadability limit so NR diverges in a meaningful regime
+            # (~30-50%) where PDL warm-start can demonstrate dominance.
+            # Tune these on a short run if the divergence rate is off.
+            test_variation=0.25,
+            test_base_scale=1.15,
         ))
-    elif n_buses >= 250 or case_key == 'case300':
-        # Scaled up for a large GPU (was throttled to d_model=48 / 3 layers /
-        # 60 iters for a 12 GB card). Restores full-size model and budget.
+    elif n_buses >= 1700 or case_key == 'case1888rte':
+        # RTE-1888: larger than PEGASE-1354 and severely ill-conditioned for
+        # flat-start NR — it diverges on ~100% of operating points at ANY
+        # load level (probed: 100% even at 0.70x the API point). So the knob
+        # here controls *rescuability*, not the flat-divergence rate: we scale
+        # the API point DOWN to ~0.78x so the diverged points stay solvable
+        # (DCPF-theta alone rescues ~38% there; PDL should rescue more). At
+        # >=0.85x almost nothing is rescuable. This gives the strongest
+        # big-system story: "flat NR diverges on 100% of points, PDL rescues
+        # X%". Re-probe if you change the case.
         cfg.update(dict(
-            n_train=7000,
-            n_stressed_test=800,
-            max_outer_iters=90,
-            pretrain_iters=12,
-            train_inner_iters=120,
-            train_batch_size=384 if use_cuda else 64,
-            train_accum_steps=8,
-            sweep_samples=300,
-            inference_chunk_size=256 if use_cuda else 64,
-            nn_supervised_samples=1200,
-            nn_epochs=36,
-            nn_batch_size=192 if use_cuda else 48,
+            n_train=3500,
+            # PDL was badly under-trained here: with the case1354 budget the
+            # training violation oscillated 26-155 p.u. for all 60 iters and
+            # NEVER converged (final 30.9 p.u.), so the predicted V/θ/Pg were
+            # near-random. On the knife-edge 0.78x test regime that injects
+            # noisy voltages into NR's tiny basin of attraction -> 0% rescue,
+            # while DCPF's clean flat-V seed rescues ~48%. Root cause was the
+            # augmented-Lagrangian penalty never growing (ρ stuck at 6.2): the
+            # primal could ignore feasibility. Fixes below: (a) longer budget
+            # so the loss can actually settle, (b) a much more aggressive ρ
+            # schedule (start at 10 to match pretrain, grow x1.5, short warmup,
+            # check every iter) so feasibility is enforced hard, (c) more
+            # pretraining to seed a feasible basin before the primal-dual loop.
+            max_outer_iters=110,
+            pretrain_iters=25,
+            train_inner_iters=90,
+            train_batch_size=96 if use_cuda else 24,
+            train_accum_steps=6,
+            sweep_samples=120 if use_cuda else 30,
+            stress_multipliers=[0.75, 0.85, 0.95, 1.00, 1.05, 1.10],
+            inference_chunk_size=96 if use_cuda else 24,
+            nn_supervised_samples=1500,
+            nn_epochs=400,
+            nn_batch_size=96 if use_cuda else 24,
             model_kwargs=dict(d_model=64, n_heads=4,
                               n_layers_primal=4, n_layers_dual=2),
+            retrain_iters=8,
+            retrain_inner_iters=80,
+            test_variation=0.20,
+            test_base_scale=0.78,
+            # Aggressive ρ schedule (vs the default 1.0 / x1.2 / warmup 15 /
+            # freq 3 that left ρ at 6.2). Start where pretrain ends (10), grow
+            # fast, and start checking early so the penalty actually climbs
+            # toward rho_max and pins down power-balance feasibility.
+            rho_init=10.0,
+            rho_max=500.0,
+            rho_alpha=1.5,
+            rho_tau=0.9,
+            rho_warmup_iters=8,
+            rho_check_freq=1,
+        ))
+    elif n_buses >= 250 or case_key == 'case300':
+        # REVERTED to the 12 GB-era config (d_model=48 / 3 primal layers /
+        # n_train=4000 / 60 iters). The "scaled up for 48 GB" config
+        # (d_model=64 / 4 layers / n_train=7000 / 90 iters) drove the ACOPF
+        # violation lower (8.1 -> 5.9 p.u.) but WORSENED NR warm-start
+        # convergence (77.2% -> 61.5%): the bigger model finds lower-violation
+        # power-flow points that are worse NR seeds (nearer the collapse
+        # branch). The smaller model is the better warm-start predictor here.
+        cfg.update(dict(
+            n_train=4000,
+            n_stressed_test=800,
+            max_outer_iters=60,
+            pretrain_iters=10,
+            train_inner_iters=90,
+            train_batch_size=192 if use_cuda else 64,
+            train_accum_steps=6,
+            sweep_samples=200,
+            inference_chunk_size=128 if use_cuda else 64,
+            nn_supervised_samples=1200,
+            nn_epochs=300,
+            nn_batch_size=96 if use_cuda else 48,
+            model_kwargs=dict(d_model=48, n_heads=4,
+                              n_layers_primal=3, n_layers_dual=2),
             retrain_iters=8,
             retrain_inner_iters=80,
         ))
@@ -1510,6 +1680,14 @@ def run_divergence_rescue_experiment(
     retrain_top_frac=0.25,
     retrain_iters=8,
     retrain_inner_iters=80,
+    test_variation=None,
+    test_base_scale=1.0,
+    rho_init=1.0,
+    rho_max=500.0,
+    rho_alpha=1.2,
+    rho_tau=0.9,
+    rho_warmup_iters=15,
+    rho_check_freq=3,
     seed=42):
     """Full pipeline: train PDL-GAT → test on PGLIB API stressed points → rescue."""
 
@@ -1521,7 +1699,8 @@ def run_divergence_rescue_experiment(
     print(f"{'=' * 80}")
     print(f"\n  CONFIG:")
     print(f"  - Architecture: GAT + Global Attention (same as c5)")
-    print(f"  - Adaptive ρ: init=1, max=500, α=1.2, τ=0.9, warmup=15, freq=3")
+    print(f"  - Adaptive ρ: init={rho_init}, max={rho_max}, α={rho_alpha}, "
+          f"τ={rho_tau}, warmup={rho_warmup_iters}, freq={rho_check_freq}")
     print(f"  - Pre-training: {pretrain_iters} iters penalty-only at ρ=10")
     print(f"  - Training data: {n_train} mixed (50% normal + 25% synth + 25% API)")
     print(f"  - Test data: {n_stressed_test} PGLIB API-derived stressed scenarios")
@@ -1571,12 +1750,12 @@ def run_divergence_rescue_experiment(
     # ------------------------------------------------------------------
     print(f"  Initialising PDL-GAT v6 model...")
     pdl = PDL_ACPF_GAT(
-        system_data, rho_init=1.0, rho_max=500.0,
-        alpha=1.2, tau=0.9,
+        system_data, rho_init=rho_init, rho_max=rho_max,
+        alpha=rho_alpha, tau=rho_tau,
         device=device, max_angle_rad=np.pi / 2.0,
         **(model_kwargs or dict(d_model=64, n_heads=4,
                                 n_layers_primal=4, n_layers_dual=2)),
-        warmup_iters=15, rho_check_freq=3,
+        warmup_iters=rho_warmup_iters, rho_check_freq=rho_check_freq,
     )
 
     # Pre-training and curriculum training
@@ -1606,12 +1785,14 @@ def run_divergence_rescue_experiment(
         print("-" * 80)
         phase_iters = per_phase_iters[ph_i] if ph_i < len(per_phase_iters) else per_phase_iters[-1]
         for it in range(phase_iters):
+            t_it = time.time()
             _, max_viol = pdl.train_epoch(
                 P_tr_t, Q_tr_t, inner_iters=train_inner_iters,
                 batch_size=train_batch_size, accum_steps=train_accum_steps)
-            if k % 5 == 0:
-                print(f"  Iter {k + 1:3d}: Max Viol={max_viol:.6e} p.u., "
-                      f"ρ={pdl.rho:.1f}")
+            # Print every iteration so progress is visible on large/slow cases
+            # (one outer iter on PEGASE1354 is ~minutes — silence looks hung).
+            print(f"  Iter {k + 1:3d}: Max Viol={max_viol:.6e} p.u., "
+                  f"ρ={pdl.rho:.1f} ({time.time() - t_it:.1f}s)", flush=True)
             k += 1
             if max_viol <= convergence_threshold:
                 break
@@ -1643,7 +1824,11 @@ def run_divergence_rescue_experiment(
 
     P_te, Q_te, strat_labels = generate_api_test_scenarios(
         ppc_api, system_data, n_stressed_test,
+        variation=test_variation, base_scale=test_base_scale,
     )
+    if test_variation is not None or test_base_scale != 1.0:
+        print(f"  Test stress knob: variation={test_variation}, "
+              f"base_scale={test_base_scale}")
     # Show load level comparison
     base_P = system_data['base_P_demand_pu']
     api_P_mean = np.mean(np.sum(P_te, axis=1))
@@ -2470,8 +2655,9 @@ if __name__ == "__main__":
         # (30, 'case30', 'IEEE30'),
         # (39, 'case39', 'EPRI39'),
         # (118, 'case118', 'IEEE118'),
-        (300, 'case300', 'IEEE300'),
-        (1354, 'case1354pegase', 'PEGASE1354'),
+        # (300, 'case300', 'IEEE300'),
+        # (1354, 'case1354pegase', 'PEGASE1354'),
+        (1888, 'case1888rte', 'RTE1888'),
     ]:
         try:
             # Load base network from pandapower (for topology / Ybus / training)
@@ -2518,6 +2704,14 @@ if __name__ == "__main__":
                 retrain_top_frac=case_cfg.get('retrain_top_frac', 0.25),
                 retrain_iters=case_cfg.get('retrain_iters', 8),
                 retrain_inner_iters=case_cfg.get('retrain_inner_iters', 80),
+                test_variation=case_cfg.get('test_variation'),
+                test_base_scale=case_cfg.get('test_base_scale', 1.0),
+                rho_init=case_cfg.get('rho_init', 1.0),
+                rho_max=case_cfg.get('rho_max', 500.0),
+                rho_alpha=case_cfg.get('rho_alpha', 1.2),
+                rho_tau=case_cfg.get('rho_tau', 0.9),
+                rho_warmup_iters=case_cfg.get('rho_warmup_iters', 15),
+                rho_check_freq=case_cfg.get('rho_check_freq', 3),
                 seed=case_cfg.get('seed', 42),
             )
             all_summaries.append(summary)

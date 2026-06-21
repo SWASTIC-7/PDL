@@ -71,6 +71,8 @@ _CASE_DISPLAY = {
     'IEEE30':     'IEEE 30',
     'PEGASE1354': 'PEGASE 1354',
     'case1354pegase': 'PEGASE 1354',
+    'RTE1888':    'RTE 1888',
+    'case1888rte': 'RTE 1888',
 }
 
 plt.rcdefaults()
